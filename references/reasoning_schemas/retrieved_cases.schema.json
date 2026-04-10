@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RetrievedCases",
+  "type": "object",
+  "required": ["query_features", "retrieved_cases", "segment_stats"],
+  "properties": {
+    "query_features": {
+      "type": "object",
+      "required": ["meal_type", "store_count_band", "has_hq_module"],
+      "properties": {
+        "meal_type": { "type": ["string", "null"] },
+        "store_count_band": { "type": ["string", "null"] },
+        "has_hq_module": { "type": "boolean" }
+      }
+    },
+    "retrieved_cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["case_id", "score"],
+        "properties": {
+          "case_id": { "type": "string" },
+          "score": { "type": "number" },
+          "brand_name": { "type": ["string", "null"] },
+          "selected_package": { "type": ["string", "null"] },
+          "store_modules": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "discounted_total": { "type": ["number", "null"] }
+        }
+      }
+    },
+    "segment_stats": {
+      "type": "object",
+      "required": ["top_packages", "top_modules"],
+      "properties": {
+        "top_packages": { "type": "array", "items": { "type": "object" } },
+        "top_modules": { "type": "array", "items": { "type": "object" } }
+      }
+    }
+  }
+}

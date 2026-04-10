@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HistoryQuoteCase",
+  "type": "object",
+  "required": [
+    "case_id",
+    "source_file",
+    "brand_name",
+    "store_modules",
+    "hq_modules",
+    "line_items",
+    "notes",
+    "raw_extract_status"
+  ],
+  "properties": {
+    "case_id": { "type": "string" },
+    "source_file": { "type": "string" },
+    "brand_name": { "type": "string" },
+    "meal_type": { "type": ["string", "null"] },
+    "quote_kind": { "type": ["string", "null"] },
+    "store_count": { "type": ["integer", "null"] },
+    "store_count_band": { "type": ["string", "null"] },
+    "selected_package": { "type": ["string", "null"] },
+    "store_modules": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "hq_modules": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "implementation_service": { "type": ["string", "null"] },
+    "discounted_total": { "type": ["number", "null"] },
+    "line_items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["product_name"],
+        "properties": {
+          "category": { "type": ["string", "null"] },
+          "product_name": { "type": "string" },
+          "unit": { "type": ["string", "null"] },
+          "discounted_unit_price": { "type": ["number", "null"] },
+          "quantity": { "type": ["number", "null"] },
+          "subtotal": { "type": ["number", "null"] }
+        }
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "raw_extract_status": { "type": "string" }
+  }
+}

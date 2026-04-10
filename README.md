@@ -156,3 +156,48 @@ python3 scripts/check_openclaw_update.py --apply
 说明：
 - 脚本会先发一条报价预览文本，再发送 PDF/Excel/JSON 三个飞书文件消息。
 - 用户可在飞书聊天窗口直接点击文件消息下载。
+
+## OpenClaw 推理架构
+
+这个项目最终运行在 OpenClaw Skills 中，因此推理阶段不在仓库内单独绑定某一家模型服务。推理所使用的模型，依赖 OpenClaw 配置的模型，并由 OpenClaw 为当前 Skill 注入具体配置。
+
+当前推荐的执行链路是：
+
+1. OpenClaw 表单提交后，先进入历史案例抽取/检索链路。
+2. `scripts/retrieve_similar_cases.py` 从历史报价案例库中找相似样本。
+3. `scripts/recommend_quote_plan.py` 调用 OpenClaw 配置的模型，输出推荐的套餐/模块补丁。
+4. 现有 `scripts/build_quotation_config.py` 继续作为规则定价引擎，负责精确计算。
+5. `scripts/audit_quote_config.py` 再调用 OpenClaw 配置的模型，对最终报价做合理性审单。
+6. `scripts/generate_quotation.py` 负责 PDF/Excel 渲染，`scripts/run_openclaw_quotation.py` 负责对话预览和文件输出。
+
+### 新增脚本
+
+- `scripts/extract_historical_quotes.py`
+  作用：把历史 Excel 报价单抽成统一 JSONL 案例库。
+- `scripts/retrieve_similar_cases.py`
+  作用：按餐饮类型、门店规模、总部模块等维度做轻量检索。
+- `scripts/recommend_quote_plan.py`
+  作用：调用 OpenClaw 配置的模型，输出推荐方案补丁。
+- `scripts/audit_quote_config.py`
+  作用：调用 OpenClaw 配置的模型，输出报价合理性审查结果。
+- `scripts/llm_client.py`
+  作用：统一封装 OpenClaw 注入的模型配置与结构化 JSON 调用。
+
+### JSON Schema
+
+推理相关输入输出契约放在：
+
+- `references/reasoning_schemas/history_quote_case.schema.json`
+- `references/reasoning_schemas/retrieved_cases.schema.json`
+- `references/reasoning_schemas/recommended_quote_plan.schema.json`
+- `references/reasoning_schemas/quote_audit.schema.json`
+
+### OpenClaw 模型配置约定
+
+脚手架默认从 OpenClaw 运行时注入的环境变量读取模型配置：
+
+- `OPENCLAW_MODEL_NAME`
+- `OPENCLAW_MODEL_API_BASE`
+- `OPENCLAW_MODEL_API_KEY`
+
+这几个值应由 OpenClaw 根据当前 Skill 绑定的模型自动下发，而不是在仓库里写死。

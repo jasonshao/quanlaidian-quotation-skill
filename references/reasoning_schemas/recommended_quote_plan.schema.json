@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RecommendedQuotePlan",
+  "type": "object",
+  "required": [
+    "recommended_form_patch",
+    "discount_guidance",
+    "reasoning",
+    "from_case_ids",
+    "confidence",
+    "needs_human_review"
+  ],
+  "properties": {
+    "recommended_form_patch": {
+      "type": "object",
+      "properties": {
+        "门店套餐": { "type": ["string", "null"] },
+        "门店增值模块": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "总部模块": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "实施服务类型": { "type": ["string", "null"] },
+        "实施服务人天": { "type": ["integer", "null"] }
+      }
+    },
+    "discount_guidance": {
+      "type": "object",
+      "required": ["suggested", "min", "max"],
+      "properties": {
+        "suggested": { "type": ["number", "null"] },
+        "min": { "type": ["number", "null"] },
+        "max": { "type": ["number", "null"] }
+      }
+    },
+    "reasoning": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "from_case_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "confidence": { "type": "number" },
+    "needs_human_review": { "type": "boolean" }
+  }
+}
