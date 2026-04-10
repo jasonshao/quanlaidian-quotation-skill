@@ -6,6 +6,7 @@
     "recommended_form_patch",
     "discount_guidance",
     "reasoning",
+    "alternative_options",
     "from_case_ids",
     "confidence",
     "needs_human_review"
@@ -39,6 +40,18 @@
     "reasoning": {
       "type": "array",
       "items": { "type": "string" }
+    },
+    "alternative_options": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["label", "summary"],
+        "properties": {
+          "label": { "type": "string" },
+          "summary": { "type": "string" },
+          "recommended_form_patch": { "type": "object" }
+        }
+      }
     },
     "from_case_ids": {
       "type": "array",

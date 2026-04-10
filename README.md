@@ -180,13 +180,13 @@ python3 scripts/check_openclaw_update.py --apply
 ### 新增脚本
 
 - `scripts/extract_historical_quotes.py`
-  作用：把历史 Excel 报价单抽成统一 JSONL 案例库。
+  作用：把历史 Excel 报价单抽成统一 JSONL 案例库，当前已支持解析套餐、门店增值模块、总部模块、实施服务、总价和说明文本，并默认忽略硬件行。
 - `scripts/retrieve_similar_cases.py`
   作用：按餐饮类型、门店规模、总部模块等维度做轻量检索。
 - `scripts/recommend_quote_plan.py`
-  作用：调用 OpenClaw 配置的模型，输出推荐方案补丁。
+  作用：调用 OpenClaw 配置的模型，按售前语气输出推荐方案补丁和候选备选方案。
 - `scripts/audit_quote_config.py`
-  作用：调用 OpenClaw 配置的模型，输出报价合理性审查结果。
+  作用：调用 OpenClaw 配置的模型，输出报价合理性审查结果、风险摘要和建议调整项。
 - `scripts/llm_client.py`
   作用：统一封装 OpenClaw 注入的模型配置与结构化 JSON 调用。
 

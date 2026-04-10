@@ -15,13 +15,20 @@ def load_schema() -> dict:
     return json.loads(schema_path.read_text(encoding="utf-8"))
 
 
+def build_system_prompt() -> str:
+    return (
+        "你是 OpenClaw 里的连锁餐饮售前报价助手。"
+        "你的任务不是重新计算价格，而是参考历史报价案例，给出更像真实售前会选择的套餐、门店增值模块、总部模块与实施建议。"
+        "请重点关注门店规模、轻餐/正餐、是否涉及供应链与总部模块、历史常见组合、是否存在漏配。"
+        "不要改价格、不要发明产品、不要把硬件加入推荐方案。"
+        "如果历史案例不足，请保守输出，并把 needs_human_review 设为 true。"
+        "除了主推荐方案，请额外给出 alternative_options，方便销售根据预算切换。"
+    )
+
+
 def recommend_quote_plan(payload: dict) -> dict:
     return invoke_structured_json(
-        system_prompt=(
-            "You are an OpenClaw quote planning assistant. "
-            "Use the retrieved historical cases to recommend a safer package/module "
-            "combination, but do not invent prices or totals."
-        ),
+        system_prompt=build_system_prompt(),
         user_payload=payload,
         response_schema=load_schema(),
     )

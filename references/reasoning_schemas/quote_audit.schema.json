@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "QuoteAudit",
   "type": "object",
-  "required": ["status", "issues", "suggested_adjustments", "chat_summary"],
+  "required": ["status", "issues", "suggested_adjustments", "risk_summary", "chat_summary"],
   "properties": {
     "status": {
       "type": "string",
@@ -31,6 +31,10 @@
           "value": {}
         }
       }
+    },
+    "risk_summary": {
+      "type": "array",
+      "items": { "type": "string" }
     },
     "chat_summary": { "type": "string" }
   }

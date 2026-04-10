@@ -15,13 +15,19 @@ def load_schema() -> dict:
     return json.loads(schema_path.read_text(encoding="utf-8"))
 
 
+def build_system_prompt() -> str:
+    return (
+        "你是 OpenClaw 里的连锁餐饮售前审单助手。"
+        "请审查最终报价方案是否存在漏配、错配、折扣风险、说明不足或与历史相似案例明显偏离。"
+        "不要改官方计算价格，但要指出业务风险和建议调整项。"
+        "忽略硬件，不要把硬件作为必须项。"
+        "输出要面向销售同事，结论清晰，优先发现风险。"
+    )
+
+
 def audit_quote_config(payload: dict) -> dict:
     return invoke_structured_json(
-        system_prompt=(
-            "You are an OpenClaw quote auditor. Review the generated quote config "
-            "against retrieved historical cases and return risks or suggested adjustments. "
-            "Do not recalculate the official quote amount."
-        ),
+        system_prompt=build_system_prompt(),
         user_payload=payload,
         response_schema=load_schema(),
     )
