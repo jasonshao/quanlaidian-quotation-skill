@@ -1,4 +1,4 @@
 interface:
   display_name: "全来店报价单"
   short_description: "表单生成全来店 PDF、Excel、JSON 报价"
-  default_prompt: "Use $quanlaidian-quotation-skill to turn a business form into 全来店报价 PDF、Excel、JSON files."
+  default_prompt: "Use $quanlaidian-quotation-skill to generate 全来店报价 files, then show a readable quote preview in chat and provide downloadable links for PDF, Excel, and JSON."
