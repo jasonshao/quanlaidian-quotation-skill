@@ -129,3 +129,30 @@ python3 scripts/check_openclaw_update.py --apply
 1. 更新 `VERSION`（例如 `0.1.0` -> `0.2.0`）
 2. 更新 `CHANGELOG.md`
 3. 合并到 `main` 后发布 GitHub Release（tag 建议为 `v0.2.0`）
+
+## 飞书文件消息下载（推荐）
+
+为了解决“本地路径在飞书不可下载”的问题，主脚本已支持生成后自动上传并发送飞书文件消息。
+
+### 需要的环境变量
+
+- `FEISHU_APP_ID`
+- `FEISHU_APP_SECRET`
+- `FEISHU_RECEIVE_ID`
+- `FEISHU_RECEIVE_ID_TYPE`（可选，默认 `chat_id`）
+- `FEISHU_SEND_FILES`（可选，设为 `1/true` 时自动发送）
+
+### 使用方式
+
+显式开启发送：
+
+```bash
+.venv/bin/python scripts/run_openclaw_quotation.py \
+  --form references/openclaw_form_submission.example.json \
+  --output-dir ./mount_test_output \
+  --send-to-feishu
+```
+
+说明：
+- 脚本会先发一条报价预览文本，再发送 PDF/Excel/JSON 三个飞书文件消息。
+- 用户可在飞书聊天窗口直接点击文件消息下载。

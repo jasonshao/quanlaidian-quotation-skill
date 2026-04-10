@@ -114,3 +114,20 @@ python3 scripts/run_openclaw_quotation.py \
 - 本期不包含硬件报价
 - 若折扣超出建议范围，需要明确提示风险
 - 若配置或依赖异常，优先返回清晰错误，而不是静默失败
+
+## 飞书下载实现要求
+
+当运行环境提供飞书凭据（`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_RECEIVE_ID`）时：
+
+- 生成完成后，先在对话中发送报价预览文本；
+- 再发送 3 条飞书文件消息（PDF、Excel、JSON）；
+- 对话中明确告知“请直接点击飞书文件消息下载”。
+
+推荐命令：
+
+```bash
+python3 scripts/run_openclaw_quotation.py \
+  --form 表单.json \
+  --output-dir . \
+  --send-to-feishu
+```
