@@ -98,3 +98,34 @@ python3 scripts/run_openclaw_quotation.py \
 
 当前仓库主分支：`main`
 远程仓库：[jasonshao/quanlaidian-quotation-skill](https://github.com/jasonshao/quanlaidian-quotation-skill)
+
+## 版本发布与 OpenClaw 自动感知
+
+本仓库已内置两层更新机制：
+
+1. 发布通知（GitHub -> OpenClaw）
+- 工作流文件：`.github/workflows/release-notify-openclaw.yml`
+- 触发条件：发布 Release（`published`）
+- 行为：向 `OPENCLAW_UPDATE_WEBHOOK` 发送 JSON 通知
+
+2. 节点自检更新（OpenClaw 节点本地）
+- 脚本：`scripts/check_openclaw_update.py`
+- 检查模式：`python3 scripts/check_openclaw_update.py`
+- 自动更新：`python3 scripts/check_openclaw_update.py --apply`
+
+### 配置步骤
+
+1. 在 GitHub 仓库 Secrets 中新增：`OPENCLAW_UPDATE_WEBHOOK`
+2. 每次版本发布时创建 Tag + Release（推荐 `vX.Y.Z`）
+3. OpenClaw 节点通过定时任务执行：
+
+```bash
+cd /ai/openclaw-skills/quanlaidian-quotation-skill
+python3 scripts/check_openclaw_update.py --apply
+```
+
+### 建议发布流程
+
+1. 更新 `VERSION`（例如 `0.1.0` -> `0.2.0`）
+2. 更新 `CHANGELOG.md`
+3. 合并到 `main` 后发布 GitHub Release（tag 建议为 `v0.2.0`）
