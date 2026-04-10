@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
 import importlib
 import json
@@ -6,6 +8,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -16,6 +19,10 @@ from scripts.feishu_file_delivery import (
     deliver_files_to_feishu,
     should_send_to_feishu,
 )
+from scripts.llm_client import OpenClawLLMError
+from scripts.retrieve_similar_cases import load_casebase, retrieve_similar_cases
+from scripts.recommend_quote_plan import recommend_quote_plan
+from scripts.audit_quote_config import audit_quote_config
 
 
 def today_stamp():
@@ -35,6 +42,13 @@ def build_output_paths(brand_name, output_dir):
         output_dir / f"{base_name}-报价单-{stamp}.pdf",
         output_dir / f"{base_name}-报价单-{stamp}.xlsx",
     )
+
+
+def build_reasoning_output_path(brand_name, output_dir):
+    base_name = f"{sanitize_brand_name(brand_name)}-全来店"
+    stamp = today_stamp()
+    output_dir = Path(output_dir)
+    return output_dir / f"{base_name}-推理结果-{stamp}.json"
 
 
 def run_generator(config_path, pdf_path, xlsx_path):
@@ -99,15 +113,131 @@ def build_preview_text(form: dict, config: dict) -> str:
     return "\n".join(lines)
 
 
+def merge_form_patch(form: dict, patch: Optional[dict]) -> dict:
+    merged = dict(form)
+    if not patch:
+        return merged
+    for key, value in patch.items():
+        if value is None:
+            continue
+        merged[key] = value
+    return merged
+
+
+def build_recommendation_payload(form: dict, retrieval: dict) -> dict:
+    return {
+        "form": form,
+        "retrieved_cases": retrieval,
+    }
+
+
+def build_audit_payload(final_form: dict, quote_config: dict, retrieval: dict) -> dict:
+    return {
+        "final_form": final_form,
+        "quote_config": quote_config,
+        "retrieved_cases": retrieval,
+    }
+
+
+def run_reasoning_pipeline(form: dict, casebase: Optional[list[dict]] = None) -> dict:
+    retrieval = {
+        "query_features": {
+            "meal_type": form.get("餐饮类型"),
+            "store_count_band": None,
+            "has_hq_module": bool(form.get("总部模块")),
+        },
+        "retrieved_cases": [],
+        "segment_stats": {"top_packages": [], "top_modules": []},
+    }
+    if casebase:
+        retrieval = retrieve_similar_cases(form, casebase, top_k=5)
+
+    recommendation = {
+        "status": "skipped",
+        "recommended_form_patch": {},
+        "message": "reasoning not attempted",
+    }
+    final_form = dict(form)
+
+    if retrieval.get("retrieved_cases"):
+        try:
+            recommend_result = recommend_quote_plan(build_recommendation_payload(form, retrieval))
+            recommendation = dict(recommend_result)
+            recommendation["status"] = "applied"
+            final_form = merge_form_patch(form, recommend_result.get("recommended_form_patch", {}))
+        except OpenClawLLMError as exc:
+            recommendation = {
+                "status": "skipped",
+                "recommended_form_patch": {},
+                "message": str(exc),
+            }
+
+    audit = {
+        "status": "skipped",
+        "issues": [],
+        "suggested_adjustments": [],
+        "chat_summary": "未启用模型审单。",
+    }
+    if recommendation.get("status") == "applied":
+        try:
+            audit = audit_quote_config(
+                build_audit_payload(final_form, {"报价项目": []}, retrieval)
+            )
+        except OpenClawLLMError as exc:
+            audit = {
+                "status": "skipped",
+                "issues": [],
+                "suggested_adjustments": [],
+                "chat_summary": f"模型审单未执行：{exc}",
+            }
+    return {
+        "input_form": dict(form),
+        "retrieval": retrieval,
+        "recommendation": recommendation,
+        "final_form": final_form,
+        "audit": audit,
+    }
+
+
+def write_reasoning_result(brand_name: str, output_dir, reasoning_result: dict) -> Path:
+    output_path = build_reasoning_output_path(brand_name, output_dir)
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(reasoning_result, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return output_path
+
+
 def generate_outputs(form_path, output_dir):
     ensure_runtime_dependencies()
     form = json.loads(Path(form_path).read_text(encoding="utf-8"))
-    config = build_quotation_config(form)
-    config_path, pdf_path, xlsx_path = build_output_paths(form["客户品牌名称"], output_dir)
+    casebase_path = Path(__file__).resolve().parent.parent / "data" / "history_quote_cases.jsonl"
+    casebase = load_casebase(casebase_path) if casebase_path.exists() else []
+    reasoning_result = run_reasoning_pipeline(form, casebase)
+    final_form = reasoning_result["final_form"]
+    config = build_quotation_config(final_form)
+    reasoning_result["quote_config"] = config
+
+    if reasoning_result["recommendation"].get("status") == "applied":
+        try:
+            reasoning_result["audit"] = audit_quote_config(
+                build_audit_payload(final_form, config, reasoning_result["retrieval"])
+            )
+        except OpenClawLLMError as exc:
+            reasoning_result["audit"] = {
+                "status": "skipped",
+                "issues": [],
+                "suggested_adjustments": [],
+                "chat_summary": f"模型审单未执行：{exc}",
+            }
+
+    config_path, pdf_path, xlsx_path = build_output_paths(final_form["客户品牌名称"], output_dir)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
     run_generator(config_path, pdf_path, xlsx_path)
-    return form, config, config_path, pdf_path, xlsx_path
+    reasoning_path = write_reasoning_result(final_form["客户品牌名称"], output_dir, reasoning_result)
+    return final_form, config, config_path, pdf_path, xlsx_path, reasoning_result, reasoning_path
 
 
 def main(argv=None):
@@ -121,7 +251,10 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
 
-    form, config, config_path, pdf_path, xlsx_path = generate_outputs(args.form, args.output_dir)
+    form, config, config_path, pdf_path, xlsx_path, reasoning_result, reasoning_path = generate_outputs(
+        args.form,
+        args.output_dir,
+    )
 
     preview_text = build_preview_text(form, config)
     print(preview_text)
@@ -129,6 +262,13 @@ def main(argv=None):
     print(f"- PDF报价单：{pdf_path}")
     print(f"- Excel报价单：{xlsx_path}")
     print(f"- JSON配置文件：{config_path}")
+    print(f"- 推理结果JSON：{reasoning_path}")
+    if reasoning_result["recommendation"].get("status") == "applied":
+        print("\n方案推荐：已使用 OpenClaw 配置的模型进行推荐补全。")
+    elif reasoning_result["recommendation"].get("message"):
+        print(f"\n方案推荐：{reasoning_result['recommendation']['message']}")
+    if reasoning_result["audit"].get("chat_summary"):
+        print(f"审单结果：{reasoning_result['audit']['chat_summary']}")
 
     if should_send_to_feishu(explicit_flag=args.send_to_feishu):
         try:

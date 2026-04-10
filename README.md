@@ -170,6 +170,13 @@ python3 scripts/check_openclaw_update.py --apply
 5. `scripts/audit_quote_config.py` 再调用 OpenClaw 配置的模型，对最终报价做合理性审单。
 6. `scripts/generate_quotation.py` 负责 PDF/Excel 渲染，`scripts/run_openclaw_quotation.py` 负责对话预览和文件输出。
 
+第一版流水线已经接入 `scripts/run_openclaw_quotation.py`：
+
+- 如果存在历史案例库，会先执行相似案例检索；
+- 如果 OpenClaw 已注入模型配置，会执行推荐补全与审单；
+- 如果未注入模型配置，会自动退化为“检索 + 规则定价”，不会阻断出单；
+- 除了 PDF、Excel、报价配置 JSON 外，还会额外输出一份 `品牌名-全来店-推理结果-YYYYMMDD.json`。
+
 ### 新增脚本
 
 - `scripts/extract_historical_quotes.py`
