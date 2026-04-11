@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import math
 import re
+import statistics
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -10,6 +13,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 REFERENCES_DIR = ROOT_DIR / "references"
 PRODUCT_CATALOG_PATH = REFERENCES_DIR / "product_catalog.md"
 DISCOUNT_RULES_PATH = REFERENCES_DIR / "discount_rules.json"
+HISTORY_CASEBASE_PATH = ROOT_DIR / "data" / "history_quote_cases.jsonl"
 
 
 def parse_money(value):
@@ -106,9 +110,24 @@ def load_discount_rules(path=DISCOUNT_RULES_PATH):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def load_history_casebase(path=HISTORY_CASEBASE_PATH):
+    path = Path(path)
+    if not path.exists():
+        return []
+    rows = []
+    with path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            rows.append(json.loads(line))
+    return rows
+
+
 def parse_store_scale(scale_text):
-    if scale_text == "300店以上":
-        return 301, None
+    match = re.match(r"(\d+)店以上", scale_text)
+    if match:
+        return int(match.group(1)) + 1, None
     matched = re.match(r"(\d+)-(\d+)店", scale_text)
     if not matched:
         raise ValueError(f"无法解析门店规模规则: {scale_text}")
@@ -133,14 +152,163 @@ def build_product_index(products):
     return index
 
 
-def normalize_discount(form, rules):
+def clamp_discount(discount, rules):
+    upper = rules["折扣上限"]["软件套餐最大折扣"]
+    return max(0.0, min(round(float(discount), 4), upper))
+
+
+def _extract_package_unit_price(case, package_name):
+    for item in case.get("line_items", []):
+        if item.get("product_name") != package_name:
+            continue
+        quantity = item.get("quantity")
+        subtotal = item.get("subtotal")
+        if isinstance(quantity, (int, float)) and quantity > 0 and isinstance(subtotal, (int, float)):
+            per_unit = float(subtotal) / float(quantity)
+            if per_unit > 0:
+                return per_unit
+        unit_price = item.get("discounted_unit_price")
+        if isinstance(unit_price, (int, float)) and unit_price > 0:
+            return float(unit_price)
+    return None
+
+
+def collect_package_price_samples(package_name, meal_type, casebase):
+    samples = []
+    for case in casebase or []:
+        if case.get("raw_extract_status") != "parsed":
+            continue
+        if case.get("selected_package") != package_name:
+            continue
+        if meal_type and case.get("meal_type") not in (meal_type, None):
+            continue
+        store_count = case.get("store_count")
+        if not isinstance(store_count, int) or store_count <= 0:
+            continue
+        unit_price = _extract_package_unit_price(case, package_name)
+        if unit_price is None:
+            continue
+        samples.append({
+            "store_count": store_count,
+            "unit_price": round(unit_price, 2),
+        })
+    return samples
+
+
+def _sample_weight(target_store_count, sample_store_count):
+    if target_store_count <= 0 or sample_store_count <= 0:
+        return 0.0
+    distance = abs(math.log1p(target_store_count) - math.log1p(sample_store_count))
+    return 1.0 / (1.0 + distance)
+
+
+def _weighted_mean(samples, target_store_count):
+    weighted_total = 0.0
+    weight_sum = 0.0
+    for sample in samples:
+        weight = _sample_weight(target_store_count, sample["store_count"])
+        weighted_total += sample["unit_price"] * weight
+        weight_sum += weight
+    if weight_sum == 0:
+        return 0.0
+    return weighted_total / weight_sum
+
+
+def _weighted_median(samples, target_store_count):
+    weighted = []
+    for sample in samples:
+        weight = _sample_weight(target_store_count, sample["store_count"])
+        weighted.append((sample["unit_price"], weight))
+    weighted.sort(key=lambda item: item[0])
+    total_weight = sum(weight for _, weight in weighted)
+    if total_weight == 0:
+        return 0.0
+    threshold = total_weight / 2
+    running = 0.0
+    for value, weight in weighted:
+        running += weight
+        if running >= threshold:
+            return value
+    return weighted[-1][0]
+
+
+def _distribution_uniformity(samples):
+    if not samples:
+        return 0.0
+    counter = Counter(sample["store_count"] for sample in samples)
+    unique_factor = min(1.0, len(counter) / 5.0)
+    if len(counter) == 1:
+        entropy_factor = 0.0
+    else:
+        total = sum(counter.values())
+        entropy = -sum((count / total) * math.log(count / total) for count in counter.values())
+        entropy_factor = entropy / math.log(len(counter))
+    return round(0.5 * unique_factor + 0.5 * entropy_factor, 4)
+
+
+def recommend_discount_from_history(store_count, package, meal_type, rules=None, casebase=None):
+    rules = rules or load_discount_rules()
+    base_discount = recommend_discount(store_count, rules=rules)
+    standard_price = float(package["price"])
+    base_unit_price = standard_price * base_discount
+    samples = collect_package_price_samples(package["name"], meal_type, casebase or [])
+    pricing_info = {
+        "基础折扣": round(base_discount, 4),
+        "建议折扣": round(base_discount, 4),
+        "历史拟合折扣": round(base_discount, 4),
+        "最终折扣": round(base_discount, 4),
+        "历史样本数": len(samples),
+        "历史拟合已启用": False,
+        "历史均值单价": None,
+        "历史中位数单价": None,
+        "拟合单价": round(base_unit_price, 2),
+        "历史权重": 0.0,
+        "分布均匀度": 0.0,
+    }
+    if len(samples) < 2:
+        return pricing_info
+
+    weighted_mean = _weighted_mean(samples, store_count)
+    weighted_median = _weighted_median(samples, store_count)
+    uniformity = _distribution_uniformity(samples)
+    sample_factor = min(1.0, len(samples) / 6.0)
+    confidence = min(1.0, 0.55 * sample_factor + 0.45 * uniformity)
+    mean_weight = 0.35 + 0.35 * uniformity
+    history_anchor = weighted_mean * mean_weight + weighted_median * (1.0 - mean_weight)
+    history_weight = min(0.8, 0.8 * confidence)
+    fitted_unit_price = base_unit_price * (1.0 - history_weight) + history_anchor * history_weight
+    fitted_discount = clamp_discount(fitted_unit_price / standard_price, rules)
+
+    pricing_info.update({
+        "建议折扣": fitted_discount,
+        "历史拟合折扣": fitted_discount,
+        "历史拟合已启用": True,
+        "历史均值单价": round(weighted_mean, 2),
+        "历史中位数单价": round(weighted_median, 2),
+        "拟合单价": round(fitted_unit_price, 2),
+        "历史权重": round(history_weight, 4),
+        "分布均匀度": round(uniformity, 4),
+    })
+    return pricing_info
+
+
+def resolve_discount(form, package, rules, casebase=None):
     store_count = int(form["门店数量"])
-    recommended = recommend_discount(store_count, rules=rules)
+    pricing_info = recommend_discount_from_history(
+        store_count,
+        package=package,
+        meal_type=form["餐饮类型"],
+        rules=rules,
+        casebase=casebase,
+    )
+    recommended = pricing_info["建议折扣"]
     discount = form.get("折扣", recommended)
     discount = float(discount)
     if not 0 <= discount <= rules["折扣上限"]["软件套餐最大折扣"]:
         raise ValueError("折扣超出系统允许上限")
-    return recommended, discount
+    discount = round(discount, 4)
+    pricing_info["最终折扣"] = discount
+    return pricing_info, discount
 
 
 def lookup_product(index, name, meal_type=None, group=None):
@@ -154,7 +322,7 @@ def lookup_product(index, name, meal_type=None, group=None):
     return candidates[0]
 
 
-def validate_form(form, product_index, rules):
+def validate_form(form, product_index, rules, casebase=None):
     required = ["客户品牌名称", "餐饮类型", "门店数量", "门店套餐"]
     missing = [key for key in required if form.get(key) in (None, "", [])]
     if missing:
@@ -167,11 +335,11 @@ def validate_form(form, product_index, rules):
     if int(form["门店数量"]) <= 0:
         raise ValueError("门店数量必须大于 0")
 
-    _, discount = normalize_discount(form, rules)
-
     package = lookup_product(product_index, form["门店套餐"], group="门店套餐")
     if package["meal_type"] != meal_type:
         raise ValueError("餐饮类型与门店套餐不匹配")
+
+    pricing_info, discount = resolve_discount(form, package, rules, casebase=casebase)
 
     for module_name in form.get("门店增值模块", []):
         module = lookup_product(product_index, module_name, group="门店增值模块")
@@ -186,7 +354,7 @@ def validate_form(form, product_index, rules):
         for module_name in headquarter_modules:
             lookup_product(product_index, module_name, meal_type=meal_type, group="总部模块")
 
-    return discount
+    return package, pricing_info, discount
 
 
 def build_quote_item(product, quantity, discount, category, module_category):
@@ -211,13 +379,21 @@ def default_terms():
     ]
 
 
-def build_tier_config(enabled, rules):
+def build_tier_config(enabled, rules, package=None, meal_type=None, casebase=None):
     if not enabled:
         return []
     candidates = [30, 50, 100]
     tiers = []
     for count in candidates:
         discount = recommend_discount(count, rules=rules)
+        if package and meal_type:
+            discount = recommend_discount_from_history(
+                count,
+                package=package,
+                meal_type=meal_type,
+                rules=rules,
+                casebase=casebase,
+            )["建议折扣"]
         tiers.append({
             "标签": f"{count}店方案",
             "门店数": count,
@@ -230,14 +406,14 @@ def build_quotation_config(form, quote_date=None):
     products = load_product_catalog()
     product_index = build_product_index(products)
     rules = load_discount_rules()
-    discount = validate_form(form, product_index, rules)
+    history_casebase = load_history_casebase()
+    package, pricing_info, discount = validate_form(form, product_index, rules, casebase=history_casebase)
 
     meal_type = form["餐饮类型"]
     store_count = int(form["门店数量"])
     quote_date = quote_date or datetime.now().strftime("%Y年%m月%d日")
     items = []
 
-    package = lookup_product(product_index, form["门店套餐"], meal_type=meal_type, group="门店套餐")
     items.append(build_quote_item(package, store_count, discount, "门店套餐", "门店软件套餐"))
 
     for module_name in form.get("门店增值模块", []):
@@ -269,10 +445,17 @@ def build_quotation_config(form, quote_date=None):
         "报价有效期": "30个工作日",
         "门店数量": store_count,
         "报价项目": items,
+        "定价信息": pricing_info,
         "条款": default_terms(),
     }
 
-    tiers = build_tier_config(form.get("是否启用阶梯报价"), rules)
+    tiers = build_tier_config(
+        form.get("是否启用阶梯报价"),
+        rules,
+        package=package,
+        meal_type=meal_type,
+        casebase=history_casebase,
+    )
     if tiers:
         config["阶梯配置"] = tiers
     return config
