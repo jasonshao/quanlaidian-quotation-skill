@@ -14,6 +14,13 @@ from scripts.build_quotation_config import build_quotation_config
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_COST_DATA_PATH = ROOT_DIR / "references" / "pricing_baseline_v5.json"
+DEFAULT_COST_DATA_OBF_PATH = ROOT_DIR / "references" / "pricing_baseline_v5.obf"
+
+
+def resolve_cost_data_path():
+    if DEFAULT_COST_DATA_OBF_PATH.exists():
+        return DEFAULT_COST_DATA_OBF_PATH
+    return DEFAULT_COST_DATA_PATH
 
 
 def today_stamp():
@@ -36,6 +43,7 @@ def build_output_paths(brand_name, output_dir):
 
 
 def run_generator(config_path, pdf_path, xlsx_path):
+    cost_data_path = resolve_cost_data_path()
     command = [
         sys.executable,
         str(Path(__file__).resolve().parent / "generate_quotation.py"),
@@ -47,7 +55,7 @@ def run_generator(config_path, pdf_path, xlsx_path):
         str(xlsx_path),
         "--profit",
         "--cost-data",
-        str(DEFAULT_COST_DATA_PATH),
+        str(cost_data_path),
     ]
     subprocess.run(command, check=True)
 

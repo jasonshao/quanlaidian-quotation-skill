@@ -14,6 +14,7 @@ import os
 import argparse
 from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
+from pathlib import Path
 
 # ============================================================
 # reportlab imports
@@ -88,6 +89,11 @@ else:
     _CN_FONT_NAME = _CJK_FONT_NAME
 
 import re
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from scripts.pricing_baseline_codec import load_baseline_from_files
 
 def _mixed_text(text):
     """
@@ -270,6 +276,20 @@ def build_cost_lookup(cost_data):
                 except Exception:
                     pass
     return {'mode': 'flat', 'flat': flat}
+
+
+def load_cost_data(path):
+    p = Path(path)
+    if p.suffix == ".obf":
+        data = load_baseline_from_files(
+            json_path=p.with_suffix(".json"),
+            obf_path=p,
+        )
+        return data
+    return load_baseline_from_files(
+        json_path=p,
+        obf_path=p.with_suffix(".obf"),
+    )
 
 
 def resolve_item_cost(item, quote_data, lookup):
@@ -1724,8 +1744,7 @@ def main():
 
     # ── 利润测算 ──
     if args.profit and args.cost_data:
-        with open(args.cost_data, 'r', encoding='utf-8') as f:
-            cost_data = json.load(f)
+        cost_data = load_cost_data(args.cost_data)
         calc_profit(data, cost_data)
     elif args.profit:
         print("\n⚠️ 需要提供 --cost-data 参数才能进行利润测算")
