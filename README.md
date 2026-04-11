@@ -45,12 +45,34 @@
 - 是否启用阶梯报价（可选）
 - 实施服务类型/实施服务人天（可选）
 
+## 价格基线与部署密钥
+
+- 仓库仅保留混淆基线：`references/pricing_baseline_v5.obf`
+- 已移除明文基线：`references/pricing_baseline_v5.json`（禁止入库）
+- 运行时必须注入环境变量：`PRICING_BASELINE_KEY`
+- 生产环境建议开启：`PRICING_BASELINE_STRICT=1`
+
+示例：
+
+```bash
+export PRICING_BASELINE_KEY=请替换为部署密钥
+export PRICING_BASELINE_STRICT=1
+```
+
+密钥请通过 CI/CD Secret、容器环境变量或密钥管理系统注入，不要写入仓库。
+
 ## 本地命令行验证
 
 安装依赖：
 
 ```bash
 python3 -m pip install -r requirements.txt
+```
+
+运行前请先设置密钥环境变量：
+
+```bash
+export PRICING_BASELINE_KEY=请替换为部署密钥
 ```
 
 仅生成报价配置 JSON：
@@ -115,6 +137,9 @@ python3 scripts/run_openclaw_quotation.py \
 
 3. 结果文件没有生成
    - 检查 `--form` 路径是否正确、字段是否齐全，或查看终端错误信息
+
+4. 报错“检测到混淆基线文件但缺少 PRICING_BASELINE_KEY”
+   - 在运行前注入 `PRICING_BASELINE_KEY`；生产建议同时开启 `PRICING_BASELINE_STRICT=1`
 
 ## 版本说明
 

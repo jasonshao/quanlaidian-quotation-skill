@@ -205,3 +205,6 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Pricing baseline plaintext (do not commit)
+references/pricing_baseline_v5.json
