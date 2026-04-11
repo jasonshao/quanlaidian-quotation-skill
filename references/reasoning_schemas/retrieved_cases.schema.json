@@ -27,6 +27,11 @@
             "type": "array",
             "items": { "type": "string" }
           },
+          "hq_modules": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "implementation_service": { "type": ["string", "null"] },
           "discounted_total": { "type": ["number", "null"] }
         }
       }

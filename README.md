@@ -182,7 +182,7 @@ python3 scripts/check_openclaw_update.py --apply
 - `scripts/extract_historical_quotes.py`
   作用：把历史 Excel 报价单抽成统一 JSONL 案例库，当前已支持解析套餐、门店增值模块、总部模块、实施服务、总价和说明文本，并默认忽略硬件行。
 - `scripts/retrieve_similar_cases.py`
-  作用：按餐饮类型、门店规模、总部模块等维度做轻量检索。
+  作用：按餐饮类型、门店规模带宽、套餐相似度、门店/总部模块重合度、实施服务相似度做分层检索和排序，并输出高频套餐/模块统计。
 - `scripts/recommend_quote_plan.py`
   作用：调用 OpenClaw 配置的模型，按售前语气输出推荐方案补丁和候选备选方案。
 - `scripts/audit_quote_config.py`
