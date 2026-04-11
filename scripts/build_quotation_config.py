@@ -157,6 +157,36 @@ def clamp_discount(discount, rules):
     return max(0.0, min(round(float(discount), 4), upper))
 
 
+def clamp_discount_range(discount, lower_bound, upper_bound):
+    return round(max(float(lower_bound), min(float(discount), float(upper_bound))), 4)
+
+
+def get_history_fit_params(meal_type, rules):
+    defaults = {
+        "最大历史权重": 0.75,
+        "样本饱和值": 6,
+        "样本置信权重": 0.55,
+        "均匀度置信权重": 0.45,
+        "均值权重基础": 0.35,
+        "均值权重均匀度增益": 0.35,
+    }
+    params = dict(defaults)
+    params.update(rules.get("历史拟合参数", {}).get(meal_type, {}))
+    return params
+
+
+def get_history_fit_bounds(store_count, meal_type, rules):
+    meal_bounds = rules.get("历史拟合折扣约束", {}).get(meal_type, [])
+    for row in meal_bounds:
+        start, end = parse_store_scale(row["规模"])
+        if end is None and store_count >= start:
+            return float(row["最小折扣"]), float(row["最大折扣"])
+        if start <= store_count <= end:
+            return float(row["最小折扣"]), float(row["最大折扣"])
+    upper = float(rules["折扣上限"]["软件套餐最大折扣"])
+    return 0.0, upper
+
+
 def _extract_package_unit_price(case, package_name):
     for item in case.get("line_items", []):
         if item.get("product_name") != package_name:
@@ -252,6 +282,8 @@ def recommend_discount_from_history(store_count, package, meal_type, rules=None,
     standard_price = float(package["price"])
     base_unit_price = standard_price * base_discount
     samples = collect_package_price_samples(package["name"], meal_type, casebase or [])
+    fit_params = get_history_fit_params(meal_type, rules)
+    lower_bound, upper_bound = get_history_fit_bounds(store_count, meal_type, rules)
     pricing_info = {
         "基础折扣": round(base_discount, 4),
         "建议折扣": round(base_discount, 4),
@@ -264,6 +296,9 @@ def recommend_discount_from_history(store_count, package, meal_type, rules=None,
         "拟合单价": round(base_unit_price, 2),
         "历史权重": 0.0,
         "分布均匀度": 0.0,
+        "历史拟合参数体系": meal_type,
+        "历史拟合折扣下限": round(lower_bound, 4),
+        "历史拟合折扣上限": round(upper_bound, 4),
     }
     if len(samples) < 2:
         return pricing_info
@@ -271,13 +306,18 @@ def recommend_discount_from_history(store_count, package, meal_type, rules=None,
     weighted_mean = _weighted_mean(samples, store_count)
     weighted_median = _weighted_median(samples, store_count)
     uniformity = _distribution_uniformity(samples)
-    sample_factor = min(1.0, len(samples) / 6.0)
-    confidence = min(1.0, 0.55 * sample_factor + 0.45 * uniformity)
-    mean_weight = 0.35 + 0.35 * uniformity
+    sample_factor = min(1.0, len(samples) / float(fit_params["样本饱和值"]))
+    confidence = min(
+        1.0,
+        float(fit_params["样本置信权重"]) * sample_factor
+        + float(fit_params["均匀度置信权重"]) * uniformity,
+    )
+    mean_weight = float(fit_params["均值权重基础"]) + float(fit_params["均值权重均匀度增益"]) * uniformity
     history_anchor = weighted_mean * mean_weight + weighted_median * (1.0 - mean_weight)
-    history_weight = min(0.8, 0.8 * confidence)
+    history_weight = min(float(fit_params["最大历史权重"]), float(fit_params["最大历史权重"]) * confidence)
     fitted_unit_price = base_unit_price * (1.0 - history_weight) + history_anchor * history_weight
     fitted_discount = clamp_discount(fitted_unit_price / standard_price, rules)
+    fitted_discount = clamp_discount_range(fitted_discount, lower_bound, upper_bound)
 
     pricing_info.update({
         "建议折扣": fitted_discount,
