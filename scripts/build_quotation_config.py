@@ -307,8 +307,6 @@ def should_filter_history_sample(sample, meal_type, sample_bucket):
     days = (now_dt().date() - dt.date()).days
     if days < 0:
         return "future_date"
-    if days > HISTORY_WINDOW_MONTHS * 31:
-        return "out_of_window"
 
     factor = extract_sample_factor(sample)
     if factor is None:
