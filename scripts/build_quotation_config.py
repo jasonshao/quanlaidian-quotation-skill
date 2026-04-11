@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import argparse
 import json
-import re
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
@@ -10,10 +9,8 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parent.parent
 REFERENCES_DIR = ROOT_DIR / "references"
 PRODUCT_CATALOG_PATH = REFERENCES_DIR / "product_catalog.md"
-DISCOUNT_RULES_PATH = REFERENCES_DIR / "discount_rules.json"
 PRICING_BASELINE_PATH = REFERENCES_DIR / "pricing_baseline_v5.json"
 SMALL_SEGMENT_MAX_STORES = 30
-DEFAULT_SMALL_SEGMENT_ENABLED = True
 SMALL_SEGMENT_ALGORITHM_VERSION = "small-segment-v1"
 HISTORY_WINDOW_MONTHS = 12
 SMALL_SEGMENT_START_UNIT_PRICE = {
@@ -164,10 +161,6 @@ def load_product_catalog(path=PRODUCT_CATALOG_PATH):
     return products
 
 
-def load_discount_rules(path=DISCOUNT_RULES_PATH):
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
 def load_pricing_baseline(path=PRICING_BASELINE_PATH):
     if not path.exists():
         return {"items": []}
@@ -222,26 +215,6 @@ def resolve_product_pricing(product, quote_meal_type, baseline_index):
 
     standard_price = compute_standard_price_by_group(group, name, cost_price)
     return int(standard_price), float(cost_price), "baseline_v5"
-
-
-def parse_store_scale(scale_text):
-    if scale_text == "300店以上":
-        return 301, None
-    matched = re.match(r"(\d+)-(\d+)店", scale_text)
-    if not matched:
-        raise ValueError(f"无法解析门店规模规则: {scale_text}")
-    return int(matched.group(1)), int(matched.group(2))
-
-
-def recommend_discount(store_count, rules=None):
-    rules = rules or load_discount_rules()
-    for rule in rules["折扣规则"]["按门店规模"]:
-        start, end = parse_store_scale(rule["规模"])
-        if end is None and store_count >= start:
-            return rule["建议折扣"]
-        if start <= store_count <= end:
-            return rule["建议折扣"]
-    return 0
 
 
 def _small_segment_bucket(store_count):
@@ -482,32 +455,21 @@ def _extract_deal_price_factor_input(form):
     return None, None
 
 
-def normalize_deal_price_factor(form, rules, route_strategy):
+def normalize_deal_price_factor(form):
     store_count = int(form["门店数量"])
     meal_type = form["餐饮类型"]
-    legacy_recommended_discount = recommend_discount(store_count, rules=rules)
-    legacy_recommended_factor = 1 - float(legacy_recommended_discount)
+    recommended_factor = recommend_base_deal_price_factor_smooth(store_count, meal_type)
     provided_factor, source = _extract_deal_price_factor_input(form)
 
-    if route_strategy == "small-segment":
-        recommended_factor = recommend_base_deal_price_factor_smooth(store_count, meal_type)
-        if provided_factor is None:
-            return round(recommended_factor, 6), round(recommended_factor, 6), "auto"
-        reason = _normalize_manual_reason(form)
-        if not reason:
-            raise ValueError("人工改价必须填写原因")
-        if not 0 < provided_factor <= 1:
-            raise ValueError("成交价系数必须在 (0, 1] 区间")
-        return round(recommended_factor, 6), round(float(provided_factor), 6), source
-
     if provided_factor is None:
-        return round(legacy_recommended_factor, 6), round(legacy_recommended_factor, 6), "auto-legacy"
+        return round(recommended_factor, 6), round(recommended_factor, 6), "auto"
+
     reason = _normalize_manual_reason(form)
     if not reason:
         raise ValueError("人工改价必须填写原因")
     if not 0 < provided_factor <= 1:
         raise ValueError("成交价系数必须在 (0, 1] 区间")
-    return round(legacy_recommended_factor, 6), round(float(provided_factor), 6), source
+    return round(recommended_factor, 6), round(float(provided_factor), 6), source
 
 
 def lookup_product(index, name, meal_type=None, group=None):
@@ -521,32 +483,7 @@ def lookup_product(index, name, meal_type=None, group=None):
     return candidates[0]
 
 
-def determine_route_strategy(form):
-    store_count = int(form["门店数量"])
-    small_segment_enabled = as_bool(form.get("small_segment_enabled"), default=DEFAULT_SMALL_SEGMENT_ENABLED)
-    if store_count > SMALL_SEGMENT_MAX_STORES:
-        return "unsupported", "store_count_gt_30"
-    if not small_segment_enabled:
-        return "legacy", "small_segment_enabled=false"
-
-    non_standard_flags = [
-        "多年合同特殊政策",
-        "续约增购特价",
-        "区域价差",
-        "渠道价差",
-        "硬件报价",
-        "特殊审批商品",
-        "特殊商务条款",
-        "复杂联购组合",
-        "跨餐饮类型混合套餐",
-    ]
-    for flag in non_standard_flags:
-        if bool(form.get(flag)):
-            return "legacy", f"non_standard_flag:{flag}"
-    return "small-segment", "store_count_le_30_standard_scope"
-
-
-def validate_form(form, product_index, rules, route_strategy):
+def validate_form(form, product_index):
     required = ["客户品牌名称", "餐饮类型", "门店数量", "门店套餐"]
     missing = [key for key in required if form.get(key) in (None, "", [])]
     if missing:
@@ -561,7 +498,7 @@ def validate_form(form, product_index, rules, route_strategy):
     if int(form["门店数量"]) > SMALL_SEGMENT_MAX_STORES:
         raise ValueError("31店及以上暂不受理，请转人工定价")
 
-    recommended_factor, chosen_factor, factor_source = normalize_deal_price_factor(form, rules, route_strategy)
+    recommended_factor, chosen_factor, factor_source = normalize_deal_price_factor(form)
 
     package = lookup_product(product_index, form["门店套餐"], group="门店套餐")
     if package["meal_type"] != meal_type:
@@ -641,31 +578,25 @@ def default_terms():
     ]
 
 
-def build_tier_config(enabled, rules):
+def build_tier_config(enabled, meal_type):
     if not enabled:
         return []
     candidates = [10, 20, 30]
     tiers = []
     for count in candidates:
-        discount = recommend_discount(count, rules=rules)
-        factor = round(1 - float(discount), 6)
+        factor = round(recommend_base_deal_price_factor_smooth(count, meal_type), 6)
         tiers.append({
             "标签": f"{count}店方案",
             "门店数": count,
             "成交价系数": factor,
             "deal_price_factor": factor,
-            "折扣": discount,
         })
     return tiers
 
 
-def legacy_factor(store_count, rules):
-    return round(1 - float(recommend_discount(store_count, rules=rules)), 6)
-
-
 def build_manual_override_audit(form, recommended_factor, final_factor, bounded_range, factor_source):
     reason = _normalize_manual_reason(form)
-    is_manual = factor_source not in {"auto", "auto-legacy"}
+    is_manual = factor_source != "auto"
     if not is_manual:
         return {
             "manual_override": False,
@@ -704,7 +635,6 @@ def build_manual_override_audit(form, recommended_factor, final_factor, bounded_
 
 
 def build_approval_decision(
-    route_strategy,
     base_factor,
     final_factor,
     history_sample_count,
@@ -717,7 +647,7 @@ def build_approval_decision(
     elif final_factor < (base_factor - 0.01):
         reasons.append("final_factor_below_base_minus_0.01:manager_approval")
 
-    if manual_override and history_sample_count < 6 and route_strategy == "small-segment":
+    if manual_override and history_sample_count < 6:
         reasons.append("manual_override_without_sufficient_history")
 
     # 保护类商品已硬保护；这里保留审计提示，便于监控拦截链路
@@ -735,68 +665,55 @@ def build_quotation_config(form, quote_date=None):
     baseline = load_pricing_baseline()
     baseline_index = build_pricing_baseline_index(baseline)
     product_index = build_product_index(products)
-    rules = load_discount_rules()
     meal_type = form["餐饮类型"]
     store_count = int(form["门店数量"])
-    route_strategy, route_reason = determine_route_strategy(form)
-    normalized = validate_form(form, product_index, rules, route_strategy)
+    normalized = validate_form(form, product_index)
     deal_price_factor = normalized["deal_price_factor"]
     recommended_factor = normalized["recommended_factor"]
-    sample_bucket = _small_segment_bucket(store_count) if route_strategy == "small-segment" else None
-    history_meta = {
-        "history_sample_count": 0,
-        "history_weight": 0.0,
-        "history_anchor": None,
-        "history_filtered_reason_summary": [],
-    }
+    sample_bucket = _small_segment_bucket(store_count)
 
-    if route_strategy == "small-segment":
-        base_for_history = deal_price_factor
-        # 仅在自动推荐时启用历史拟合，人工改价保持显式输入优先
-        if normalized["factor_source"] == "auto":
-            history_adjusted = apply_history_adjustment(
-                form=form,
-                meal_type=meal_type,
-                sample_bucket=sample_bucket,
-                base_factor=base_for_history,
-            )
-            deal_price_factor = history_adjusted["final_factor"]
-            history_meta = {
-                "history_sample_count": history_adjusted["history_sample_count"],
-                "history_weight": history_adjusted["history_weight"],
-                "history_anchor": history_adjusted["history_anchor"],
-                "history_filtered_reason_summary": history_adjusted["history_filtered_reason_summary"],
-            }
-        else:
-            history_meta = {
-                "history_sample_count": 0,
-                "history_weight": 0.0,
-                "history_anchor": None,
-                "history_filtered_reason_summary": [{"reason": "manual_override_skip_history", "count": 1}],
-            }
+    # 仅在自动推荐时启用历史拟合，人工改价保持显式输入优先
+    if normalized["factor_source"] == "auto":
+        history_adjusted = apply_history_adjustment(
+            form=form,
+            meal_type=meal_type,
+            sample_bucket=sample_bucket,
+            base_factor=deal_price_factor,
+        )
+        deal_price_factor = history_adjusted["final_factor"]
+        history_meta = {
+            "history_sample_count": history_adjusted["history_sample_count"],
+            "history_weight": history_adjusted["history_weight"],
+            "history_anchor": history_adjusted["history_anchor"],
+            "history_filtered_reason_summary": history_adjusted["history_filtered_reason_summary"],
+        }
+    else:
+        history_meta = {
+            "history_sample_count": 0,
+            "history_weight": 0.0,
+            "history_anchor": None,
+            "history_filtered_reason_summary": [{"reason": "manual_override_skip_history", "count": 1}],
+        }
 
     auto_adjustments = []
-    if route_strategy == "small-segment" and history_meta["history_weight"] > 0:
+    if history_meta["history_weight"] > 0:
         auto_adjustments.append({
             "name": "history_adjustment",
             "weight": history_meta["history_weight"],
             "anchor": history_meta["history_anchor"],
         })
 
-    bounded_range = None
-    if route_strategy == "small-segment":
-        lower, upper = small_segment_bounds(store_count, meal_type)
-        pre_bound_factor = deal_price_factor
-        bounded_factor = min(upper, max(lower, deal_price_factor))
-        deal_price_factor = round(bounded_factor, 6)
-        bounded_range = [lower, upper]
-        if round(pre_bound_factor, 6) != round(deal_price_factor, 6):
-            auto_adjustments.append({
-                "name": "bounded_clamp",
-                "before": round(pre_bound_factor, 6),
-                "after": round(deal_price_factor, 6),
-                "range": bounded_range,
-            })
+    lower, upper = small_segment_bounds(store_count, meal_type)
+    pre_bound_factor = deal_price_factor
+    deal_price_factor = round(min(upper, max(lower, deal_price_factor)), 6)
+    bounded_range = [lower, upper]
+    if round(pre_bound_factor, 6) != round(deal_price_factor, 6):
+        auto_adjustments.append({
+            "name": "bounded_clamp",
+            "before": round(pre_bound_factor, 6),
+            "after": round(deal_price_factor, 6),
+            "range": bounded_range,
+        })
 
     quote_date = quote_date or datetime.now().strftime("%Y年%m月%d日")
     items = []
@@ -807,7 +724,7 @@ def build_quotation_config(form, quote_date=None):
 
     for module_name in form.get("门店增值模块", []):
         module = lookup_product(product_index, module_name, meal_type=meal_type, group="门店增值模块")
-        item_factor = deal_price_factor if route_strategy != "small-segment" else min(1.0, round(deal_price_factor + 0.03, 6))
+        item_factor = min(1.0, round(deal_price_factor + 0.03, 6))
         category = "保护类商品" if is_protected_product(module["name"]) else "增值模块"
         standard_price, _, _ = resolve_product_pricing(module, meal_type, baseline_index)
         items.append(build_quote_item(module, standard_price, store_count, item_factor, category, "门店增值模块"))
@@ -847,14 +764,12 @@ def build_quotation_config(form, quote_date=None):
         factor_source=normalized["factor_source"],
     )
     approval = build_approval_decision(
-        route_strategy=route_strategy,
         base_factor=recommended_factor,
         final_factor=deal_price_factor,
         history_sample_count=history_meta["history_sample_count"],
         manual_override=manual_audit["manual_override"],
         protected_item_bypass=protected_bypass_count > 0,
     )
-    legacy_recommendation = legacy_factor(store_count, rules)
 
     config = {
         "客户信息": {
@@ -867,28 +782,19 @@ def build_quotation_config(form, quote_date=None):
         "报价项目": items,
         "条款": default_terms(),
         "pricing_info": {
-            "scope_match": route_strategy == "small-segment",
-            "route_strategy": route_strategy,
-            "route_reason": route_reason,
-            "algorithm_version": SMALL_SEGMENT_ALGORITHM_VERSION if route_strategy == "small-segment" else "legacy-v1",
+            "algorithm_version": SMALL_SEGMENT_ALGORITHM_VERSION,
             "sample_bucket": sample_bucket,
             "base_factor": round(recommended_factor, 6),
             "auto_adjustments": auto_adjustments,
             "bounded_range": bounded_range,
             "final_factor": round(deal_price_factor, 6),
             "deal_price_factor_source": normalized["factor_source"],
-            "small_segment_enabled": as_bool(
-                form.get("small_segment_enabled"),
-                default=DEFAULT_SMALL_SEGMENT_ENABLED,
-            ),
             "protected_item_bypass": protected_bypass_count > 0,
             "history_sample_count": history_meta["history_sample_count"],
             "history_weight": history_meta["history_weight"],
             "history_anchor": history_meta["history_anchor"],
             "history_window_months": HISTORY_WINDOW_MONTHS,
             "history_filtered_reason_summary": history_meta["history_filtered_reason_summary"],
-            "legacy_factor": legacy_recommendation,
-            "new_vs_legacy_factor_delta": round(deal_price_factor - legacy_recommendation, 6),
             "approval_required": approval["approval_required"],
             "approval_reason": approval["approval_reason"],
             "manual_override_reason": manual_audit["manual_override_reason"],
@@ -903,7 +809,7 @@ def build_quotation_config(form, quote_date=None):
         },
     }
 
-    tiers = build_tier_config(form.get("是否启用阶梯报价"), rules)
+    tiers = build_tier_config(form.get("是否启用阶梯报价"), meal_type)
     if tiers:
         config["阶梯配置"] = tiers
     return config
