@@ -1,0 +1,322 @@
+{
+  "version": "v5",
+  "source_file": "/Users/jiajia/云同步盘/市场-workshop/全来店报价原材料/成本价/全来店底价单V5.xlsx",
+  "generated_at": "2026-04-11 12:56:36",
+  "items": [
+    {
+      "meal_type": "正餐",
+      "group": "实施服务",
+      "name": "二类城市顾问服务T5",
+      "unit": "人天",
+      "cost_price": 1000.0
+    },
+    {
+      "meal_type": "正餐",
+      "group": "总部模块",
+      "name": "企业微信SCRM",
+      "unit": "品牌/年",
+      "cost_price": 5000.0856
+    },
+    {
+      "meal_type": "正餐",
+      "group": "总部模块",
+      "name": "生产加工",
+      "unit": "个/年",
+      "cost_price": 2900.0
+    },
+    {
+      "meal_type": "正餐",
+      "group": "总部模块",
+      "name": "配送中心",
+      "unit": "个/年",
+      "cost_price": 2950.0
+    },
+    {
+      "meal_type": "正餐",
+      "group": "门店增值模块",
+      "name": "供应链基础-门店点位",
+      "unit": "店/年",
+      "cost_price": 195.0
+    },
+    {
+      "meal_type": "正餐",
+      "group": "门店增值模块",
+      "name": "公共-物流通",
+      "unit": "组织/年",
+      "cost_price": 183.0
+    },
+    {
+      "meal_type": "正餐",
+      "group": "门店增值模块",
+      "name": "公共-财务通",
+      "unit": "组织/年",
+      "cost_price": 183.0
+    },
+    {
+      "meal_type": "正餐",
+      "group": "门店增值模块",
+      "name": "分账管理接口",
+      "unit": "店/年",
+      "cost_price": 75.0
+    },
+    {
+      "meal_type": "正餐",
+      "group": "门店增值模块",
+      "name": "厨房KDS",
+      "unit": "店/年",
+      "cost_price": 195.0
+    },
+    {
+      "meal_type": "正餐",
+      "group": "门店增值模块",
+      "name": "商管接口",
+      "unit": "店/年",
+      "cost_price": 1000.0
+    },
+    {
+      "meal_type": "正餐",
+      "group": "门店增值模块",
+      "name": "宴秘书宴会版套餐（宴会版）",
+      "unit": "店/年",
+      "cost_price": 1200.0
+    },
+    {
+      "meal_type": "正餐",
+      "group": "门店增值模块",
+      "name": "宴秘书标准版套餐（标准版）",
+      "unit": "店/年",
+      "cost_price": 400.0
+    },
+    {
+      "meal_type": "正餐",
+      "group": "门店增值模块",
+      "name": "成本管理",
+      "unit": "店/年",
+      "cost_price": 230.0
+    },
+    {
+      "meal_type": "正餐",
+      "group": "门店增值模块",
+      "name": "易订套餐宴会版",
+      "unit": "店/年",
+      "cost_price": 2000.0
+    },
+    {
+      "meal_type": "正餐",
+      "group": "门店增值模块",
+      "name": "易订套餐（win/安卓）",
+      "unit": "店/年",
+      "cost_price": 1500.0
+    },
+    {
+      "meal_type": "正餐",
+      "group": "门店增值模块",
+      "name": "晓食菜单（固定模版）",
+      "unit": "店/年",
+      "cost_price": 1000.0
+    },
+    {
+      "meal_type": "正餐",
+      "group": "门店增值模块",
+      "name": "智能预估",
+      "unit": "店/年",
+      "cost_price": 230.0
+    },
+    {
+      "meal_type": "正餐",
+      "group": "门店增值模块",
+      "name": "电子发票-税号",
+      "unit": "税号/年",
+      "cost_price": 209.0
+    },
+    {
+      "meal_type": "正餐",
+      "group": "门店增值模块",
+      "name": "电子发票接口",
+      "unit": "店/年",
+      "cost_price": 365.0
+    },
+    {
+      "meal_type": "正餐",
+      "group": "门店套餐",
+      "name": "正餐连锁供应链版",
+      "unit": "店/年",
+      "cost_price": 556.0
+    },
+    {
+      "meal_type": "正餐",
+      "group": "门店套餐",
+      "name": "正餐连锁标准版",
+      "unit": "店/年",
+      "cost_price": 495.0
+    },
+    {
+      "meal_type": "正餐",
+      "group": "门店套餐",
+      "name": "正餐连锁营销全能版",
+      "unit": "店/年",
+      "cost_price": 636.0
+    },
+    {
+      "meal_type": "正餐",
+      "group": "门店套餐",
+      "name": "正餐连锁营销基础版",
+      "unit": "店/年",
+      "cost_price": 556.0
+    },
+    {
+      "meal_type": "正餐",
+      "group": "门店套餐",
+      "name": "正餐连锁营销旗舰版",
+      "unit": "店/年",
+      "cost_price": 756.0
+    },
+    {
+      "meal_type": "轻餐",
+      "group": "实施服务",
+      "name": "二类城市顾问服务T5",
+      "unit": "人天",
+      "cost_price": 1000.0
+    },
+    {
+      "meal_type": "轻餐",
+      "group": "总部模块",
+      "name": "企业微信SCRM",
+      "unit": "品牌/年",
+      "cost_price": 5000.0856
+    },
+    {
+      "meal_type": "轻餐",
+      "group": "总部模块",
+      "name": "生产加工",
+      "unit": "个/年",
+      "cost_price": 1900.0
+    },
+    {
+      "meal_type": "轻餐",
+      "group": "总部模块",
+      "name": "配送中心",
+      "unit": "个/年",
+      "cost_price": 1950.0
+    },
+    {
+      "meal_type": "轻餐",
+      "group": "门店增值模块",
+      "name": "供应链基础-门店点位",
+      "unit": "店/年",
+      "cost_price": 130.0
+    },
+    {
+      "meal_type": "轻餐",
+      "group": "门店增值模块",
+      "name": "公共-物流通",
+      "unit": "组织/年",
+      "cost_price": 183.0
+    },
+    {
+      "meal_type": "轻餐",
+      "group": "门店增值模块",
+      "name": "公共-财务通",
+      "unit": "组织/年",
+      "cost_price": 183.0
+    },
+    {
+      "meal_type": "轻餐",
+      "group": "门店增值模块",
+      "name": "分账管理接口",
+      "unit": "店/年",
+      "cost_price": 75.0
+    },
+    {
+      "meal_type": "轻餐",
+      "group": "门店增值模块",
+      "name": "厨房KDS",
+      "unit": "店/年",
+      "cost_price": 95.0
+    },
+    {
+      "meal_type": "轻餐",
+      "group": "门店增值模块",
+      "name": "叫号取餐",
+      "unit": "店/年",
+      "cost_price": 95.0
+    },
+    {
+      "meal_type": "轻餐",
+      "group": "门店增值模块",
+      "name": "商管接口",
+      "unit": "店/年",
+      "cost_price": 1000.0
+    },
+    {
+      "meal_type": "轻餐",
+      "group": "门店增值模块",
+      "name": "成本管理",
+      "unit": "店/年",
+      "cost_price": 130.0
+    },
+    {
+      "meal_type": "轻餐",
+      "group": "门店增值模块",
+      "name": "智能预估",
+      "unit": "店/年",
+      "cost_price": 130.0
+    },
+    {
+      "meal_type": "轻餐",
+      "group": "门店增值模块",
+      "name": "电子发票-税号",
+      "unit": "税号/年",
+      "cost_price": 209.0
+    },
+    {
+      "meal_type": "轻餐",
+      "group": "门店增值模块",
+      "name": "电子发票接口",
+      "unit": "店/年",
+      "cost_price": 365.0
+    },
+    {
+      "meal_type": "轻餐",
+      "group": "门店增值模块",
+      "name": "自助点餐收银大屏",
+      "unit": "店/年",
+      "cost_price": 95.0
+    },
+    {
+      "meal_type": "轻餐",
+      "group": "门店套餐",
+      "name": "轻餐连锁供应链版",
+      "unit": "店/年",
+      "cost_price": 345.0
+    },
+    {
+      "meal_type": "轻餐",
+      "group": "门店套餐",
+      "name": "轻餐连锁标准版",
+      "unit": "店/年",
+      "cost_price": 245.0
+    },
+    {
+      "meal_type": "轻餐",
+      "group": "门店套餐",
+      "name": "轻餐连锁营销全能版",
+      "unit": "店/年",
+      "cost_price": 430.0
+    },
+    {
+      "meal_type": "轻餐",
+      "group": "门店套餐",
+      "name": "轻餐连锁营销基础版",
+      "unit": "店/年",
+      "cost_price": 380.0
+    },
+    {
+      "meal_type": "轻餐",
+      "group": "门店套餐",
+      "name": "轻餐连锁营销旗舰版",
+      "unit": "店/年",
+      "cost_price": 495.0
+    }
+  ]
+}

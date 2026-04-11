@@ -235,6 +235,56 @@ def calc_actual_price(std_price, deal_price_factor):
     rounded_hundred = (raw / Decimal('100')).quantize(Decimal('1'), rounding=ROUND_HALF_UP) * Decimal('100')
     return rounded_hundred.quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)
 
+
+def _normalize_profit_group(module_category):
+    mapping = {
+        '门店软件套餐': '门店套餐',
+        '门店增值模块': '门店增值模块',
+        '总部模块': '总部模块',
+        '实施服务': '实施服务',
+    }
+    return mapping.get(module_category, module_category)
+
+
+def build_cost_lookup(cost_data):
+    if isinstance(cost_data, dict) and isinstance(cost_data.get('items'), list):
+        exact = {}
+        by_name = {}
+        for item in cost_data.get('items', []):
+            meal_type = item.get('meal_type')
+            group = item.get('group')
+            name = item.get('name')
+            cost_price = item.get('cost_price')
+            if meal_type is None or group is None or name is None or cost_price is None:
+                continue
+            exact[(str(meal_type), str(group), str(name))] = Decimal(str(cost_price))
+            by_name.setdefault(str(name), Decimal(str(cost_price)))
+        return {'mode': 'baseline_v5', 'exact': exact, 'by_name': by_name}
+
+    flat = {}
+    if isinstance(cost_data, dict):
+        for k, v in cost_data.items():
+            if isinstance(v, (int, float, str)):
+                try:
+                    flat[str(k)] = Decimal(str(v))
+                except Exception:
+                    pass
+    return {'mode': 'flat', 'flat': flat}
+
+
+def resolve_item_cost(item, quote_data, lookup):
+    name = str(item.get('商品名称', ''))
+    if lookup['mode'] == 'flat':
+        return lookup['flat'].get(name)
+
+    meal_type = str(quote_data.get('餐饮类型') or '')
+    group = _normalize_profit_group(item.get('模块分类'))
+    exact = lookup['exact']
+    cost = exact.get((meal_type, group, name))
+    if cost is not None:
+        return cost
+    return lookup['by_name'].get(name)
+
 def number_to_chinese(num):
     """数字转大写中文金额"""
     chinese_digits = '零壹贰叁肆伍陆柒捌玖'
@@ -1566,6 +1616,8 @@ def calc_profit(data, cost_data):
     total_cost = Decimal('0')
     total_revenue = Decimal('0')
 
+    cost_lookup = build_cost_lookup(cost_data)
+
     for item in items:
         name = item.get('商品名称', '')
         std_price = item.get('标准价', 0)
@@ -1581,8 +1633,7 @@ def calc_profit(data, cost_data):
         actual_price = calc_actual_price(std_price_d, deal_price_factor)
 
         # 查找底价
-        cost_key = name
-        cost = cost_data.get(cost_key, None)
+        cost = resolve_item_cost(item, data, cost_lookup)
 
         if cost is None or cost == '赠送':
             print(f"{name:<20} {'未知':>8} {float(actual_price):>8.0f} {qty:>4} {'未知':>10} {'未知':>8}")
