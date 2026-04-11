@@ -3,6 +3,7 @@ import argparse
 import json
 import re
 from datetime import datetime
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
 
@@ -10,6 +11,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 REFERENCES_DIR = ROOT_DIR / "references"
 PRODUCT_CATALOG_PATH = REFERENCES_DIR / "product_catalog.md"
 DISCOUNT_RULES_PATH = REFERENCES_DIR / "discount_rules.json"
+PRICING_BASELINE_PATH = REFERENCES_DIR / "pricing_baseline_v5.json"
 SMALL_SEGMENT_MAX_STORES = 30
 DEFAULT_SMALL_SEGMENT_ENABLED = True
 SMALL_SEGMENT_ALGORITHM_VERSION = "small-segment-v1"
@@ -20,11 +22,7 @@ SMALL_SEGMENT_START_UNIT_PRICE = {
 }
 
 PROTECTED_PRODUCT_NAMES = {
-    "财务通",
-    "物流通",
     "商管接口",
-    "公共-财务通",
-    "公共-物流通",
 }
 
 
@@ -76,6 +74,11 @@ def parse_money(value):
     if text == "赠送":
         return "赠送"
     return int(float(text))
+
+
+def round_to_10(value):
+    d = Decimal(str(value))
+    return int((d / Decimal("10")).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * Decimal("10"))
 
 
 def parse_markdown_table(lines):
@@ -165,6 +168,62 @@ def load_discount_rules(path=DISCOUNT_RULES_PATH):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def load_pricing_baseline(path=PRICING_BASELINE_PATH):
+    if not path.exists():
+        return {"items": []}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def build_pricing_baseline_index(baseline):
+    exact = {}
+    by_name = {}
+    for item in baseline.get("items", []):
+        meal_type = item.get("meal_type")
+        group = item.get("group")
+        name = item.get("name")
+        cost_price = item.get("cost_price")
+        if meal_type is None or group is None or name is None or cost_price is None:
+            continue
+        exact[(str(meal_type), str(group), str(name))] = float(cost_price)
+        by_name.setdefault(str(name), float(cost_price))
+    return {"exact": exact, "by_name": by_name}
+
+
+def classify_catalog_group(group):
+    return group
+
+
+def compute_standard_price_by_group(group, product_name, cost_price):
+    if group == "门店套餐":
+        return int(round(float(cost_price) / 0.05))
+    if group == "门店增值模块":
+        if product_name == "商管接口":
+            return int(round(float(cost_price)))
+        return round_to_10(float(cost_price) * 1.10)
+    if group == "总部模块":
+        return round_to_10(float(cost_price) * 1.20)
+    if group == "实施服务":
+        return int(round(float(cost_price)))
+    return int(round(float(cost_price)))
+
+
+def resolve_product_pricing(product, quote_meal_type, baseline_index):
+    group = classify_catalog_group(product["group"])
+    name = product["name"]
+
+    cost_price = baseline_index["exact"].get((quote_meal_type, group, name))
+    if cost_price is None:
+        cost_price = baseline_index["by_name"].get(name)
+
+    if cost_price is None:
+        # 缺失时回退旧目录价格，保证不中断
+        fallback = product["price"]
+        return int(fallback), int(fallback), "catalog_fallback"
+
+    standard_price = compute_standard_price_by_group(group, name, cost_price)
+    return int(standard_price), float(cost_price), "baseline_v5"
+
+
 def parse_store_scale(scale_text):
     if scale_text == "300店以上":
         return 301, None
@@ -198,8 +257,8 @@ def recommend_base_deal_price_factor_smooth(store_count, meal_type):
     # 新起步锚点：
     # 轻餐 1 店 1800，正餐 1 店 3000
     start_factor_map = {
-        "轻餐": SMALL_SEGMENT_START_UNIT_PRICE["轻餐"] / 6900,
-        "正餐": SMALL_SEGMENT_START_UNIT_PRICE["正餐"] / 9900,
+        "轻餐": SMALL_SEGMENT_START_UNIT_PRICE["轻餐"] / 7600,
+        "正餐": SMALL_SEGMENT_START_UNIT_PRICE["正餐"] / 11120,
     }
     start_factor = start_factor_map[meal_type]
     # 沿用原有斜率：每跨 19 店总下降 0.05
@@ -554,14 +613,14 @@ def validate_form(form, product_index, rules, route_strategy):
     }
 
 
-def build_quote_item(product, quantity, deal_price_factor, category, module_category):
+def build_quote_item(product, standard_price, quantity, deal_price_factor, category, module_category):
     protected = is_protected_product(product["name"])
     item_factor = 1.0 if protected else deal_price_factor
     return {
         "商品分类": category,
         "商品名称": product["name"],
         "单位": product["unit"],
-        "标准价": product["price"],
+        "标准价": standard_price,
         "成交价系数": item_factor,
         "deal_price_factor": item_factor,
         # 兼容旧渲染字段，语义为折扣减免比例
@@ -673,6 +732,8 @@ def build_approval_decision(
 
 def build_quotation_config(form, quote_date=None):
     products = load_product_catalog()
+    baseline = load_pricing_baseline()
+    baseline_index = build_pricing_baseline_index(baseline)
     product_index = build_product_index(products)
     rules = load_discount_rules()
     meal_type = form["餐饮类型"]
@@ -741,13 +802,15 @@ def build_quotation_config(form, quote_date=None):
     items = []
 
     package = lookup_product(product_index, form["门店套餐"], meal_type=meal_type, group="门店套餐")
-    items.append(build_quote_item(package, store_count, deal_price_factor, "标准软件套餐", "门店软件套餐"))
+    package_standard_price, _, _ = resolve_product_pricing(package, meal_type, baseline_index)
+    items.append(build_quote_item(package, package_standard_price, store_count, deal_price_factor, "标准软件套餐", "门店软件套餐"))
 
     for module_name in form.get("门店增值模块", []):
         module = lookup_product(product_index, module_name, meal_type=meal_type, group="门店增值模块")
         item_factor = deal_price_factor if route_strategy != "small-segment" else min(1.0, round(deal_price_factor + 0.03, 6))
         category = "保护类商品" if is_protected_product(module["name"]) else "增值模块"
-        items.append(build_quote_item(module, store_count, item_factor, category, "门店增值模块"))
+        standard_price, _, _ = resolve_product_pricing(module, meal_type, baseline_index)
+        items.append(build_quote_item(module, standard_price, store_count, item_factor, category, "门店增值模块"))
 
     for module_name in form.get("总部模块", []):
         quantity_field = {
@@ -759,13 +822,15 @@ def build_quotation_config(form, quote_date=None):
             continue
         module = lookup_product(product_index, module_name, meal_type=meal_type, group="总部模块")
         category = "保护类商品" if is_protected_product(module["name"]) else "总部模块"
-        items.append(build_quote_item(module, quantity, deal_price_factor, category, "总部模块"))
+        standard_price, _, _ = resolve_product_pricing(module, meal_type, baseline_index)
+        items.append(build_quote_item(module, standard_price, quantity, deal_price_factor, category, "总部模块"))
 
     implementation_type = form.get("实施服务类型")
     implementation_days = int(form.get("实施服务人天", 0) or 0)
     if implementation_type and implementation_days > 0:
         service = lookup_product(product_index, implementation_type, group="实施服务")
-        items.append(build_quote_item(service, implementation_days, 1.0, "实施服务", "实施服务"))
+        standard_price, _, _ = resolve_product_pricing(service, meal_type, baseline_index)
+        items.append(build_quote_item(service, standard_price, implementation_days, 1.0, "实施服务", "实施服务"))
 
     protected_bypass_count = sum(1 for item in items if item.get("protected_item_bypass"))
     if protected_bypass_count > 0:
@@ -797,6 +862,7 @@ def build_quotation_config(form, quote_date=None):
         },
         "报价日期": quote_date,
         "报价有效期": "30个工作日",
+        "餐饮类型": meal_type,
         "门店数量": store_count,
         "报价项目": items,
         "条款": default_terms(),
