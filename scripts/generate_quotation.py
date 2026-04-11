@@ -212,10 +212,28 @@ def fmt_money(val):
         return str(val)
 
 def fmt_pct(val):
-    """格式化折扣百分比"""
-    if val is None or val == 0:
+    """格式化成交价系数百分比"""
+    if val is None:
         return '-'
     return f'{val*100:.0f}%'
+
+
+def get_deal_price_factor(item_or_tier, default=1.0):
+    """兼容读取成交价系数，旧字段“折扣”自动转换。"""
+    if item_or_tier.get('deal_price_factor') is not None:
+        return float(item_or_tier.get('deal_price_factor'))
+    if item_or_tier.get('成交价系数') is not None:
+        return float(item_or_tier.get('成交价系数'))
+    if item_or_tier.get('折扣') is not None:
+        return 1 - float(item_or_tier.get('折扣'))
+    return float(default)
+
+
+def calc_actual_price(std_price, deal_price_factor):
+    raw = Decimal(str(std_price)) * Decimal(str(deal_price_factor))
+    # 按业务要求：折后价四舍五入到百位
+    rounded_hundred = (raw / Decimal('100')).quantize(Decimal('1'), rounding=ROUND_HALF_UP) * Decimal('100')
+    return rounded_hundred.quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)
 
 def number_to_chinese(num):
     """数字转大写中文金额"""
@@ -325,7 +343,7 @@ def build_standard_template(data, styles):
         Paragraph(_mixed_text('商品名称'), styles['CellStyleCenter']),
         Paragraph(_mixed_text('单位'), styles['CellStyleCenter']),
         Paragraph(_mixed_text('标准价'), styles['CellStyleCenter']),
-        Paragraph(_mixed_text('折扣'), styles['CellStyleCenter']),
+        Paragraph(_mixed_text('成交价系数'), styles['CellStyleCenter']),
         Paragraph(_mixed_text('数量'), styles['CellStyleCenter']),
         Paragraph(_mixed_text('实际价'), styles['CellStyleCenter']),
         Paragraph(_mixed_text('小计'), styles['CellStyleCenter']),
@@ -336,7 +354,7 @@ def build_standard_template(data, styles):
 
     for idx, item in enumerate(items, 1):
         std_price = item.get('标准价', 0)
-        discount = item.get('折扣', 0)
+        deal_price_factor = get_deal_price_factor(item)
         qty = item.get('数量', 1)
 
         if std_price == '赠送' or std_price is None:
@@ -344,9 +362,8 @@ def build_standard_template(data, styles):
             subtotal = '赠送'
         else:
             std_price_d = Decimal(str(std_price))
-            discount_d = Decimal(str(discount))
             qty_d = Decimal(str(qty))
-            actual_price_d = (std_price_d * (1 - discount_d)).quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)
+            actual_price_d = calc_actual_price(std_price_d, deal_price_factor)
             subtotal_d = (actual_price_d * qty_d).quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)
             actual_price = float(actual_price_d)
             subtotal = float(subtotal_d)
@@ -358,7 +375,7 @@ def build_standard_template(data, styles):
             Paragraph(_mixed_text(item.get('商品名称', '')), styles['CellStyle']),
             Paragraph(_mixed_text(item.get('单位', '')), styles['CellStyleCenter']),
             Paragraph(_mixed_text(fmt_money(std_price)), styles['CellStyleRight']),
-            Paragraph(_mixed_text(fmt_pct(discount)), styles['CellStyleCenter']),
+            Paragraph(_mixed_text(fmt_pct(deal_price_factor)), styles['CellStyleCenter']),
             Paragraph(_mixed_text(qty), styles['CellStyleCenter']),
             Paragraph(_mixed_text(fmt_money(actual_price)), styles['CellStyleRight']),
             Paragraph(_mixed_text(fmt_money(subtotal)), styles['CellStyleRight']),
@@ -474,10 +491,10 @@ def _build_tiered_section(data, styles):
 
     # 表头行
     def tier_label(t):
-        d = t.get('折扣', 0)
-        if d == 0:
+        d = get_deal_price_factor(t)
+        if d == 1:
             return f"{t['标签']}\n（标准价）"
-        zhe = round((1 - d) * 10, 1)
+        zhe = round(d * 10, 1)
         zhe_str = f"{int(zhe)}折" if zhe == int(zhe) else f"{zhe}折"
         return f"{t['标签']}\n（{zhe_str}）"
 
@@ -542,9 +559,9 @@ def _build_tiered_section(data, styles):
                     Paragraph(_mixed_text(fmt_money(float(std_d))), styles['CellStyleRight']),
                 ]
                 for ti, t in enumerate(tiers):
-                    d = Decimal(str(t.get('折扣', 0))) if apply_tier_discount else Decimal('0')
+                    d = Decimal(str(get_deal_price_factor(t))) if apply_tier_discount else Decimal('1')
                     qty = Decimal(str(t['门店数'])) if is_per_store else Decimal(str(item_qty))
-                    actual = (std_d * (1 - d)).quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)
+                    actual = calc_actual_price(std_d, d)
                     subtotal = (actual * qty).quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)
                     cat_tier_totals[ti] += subtotal
                     row.append(Paragraph(_mixed_text(fmt_money(float(subtotal))), styles['CellStyleRight']))
@@ -699,7 +716,7 @@ def build_custom_template(data, styles):
             Paragraph(_mixed_text('商品名称'), styles['CellStyleCenter']),
             Paragraph(_mixed_text('单位'), styles['CellStyleCenter']),
             Paragraph(_mixed_text('标准价'), styles['CellStyleCenter']),
-            Paragraph(_mixed_text('折扣'), styles['CellStyleCenter']),
+            Paragraph(_mixed_text('成交价系数'), styles['CellStyleCenter']),
             Paragraph(_mixed_text('数量'), styles['CellStyleCenter']),
             Paragraph(_mixed_text('实际价'), styles['CellStyleCenter']),
             Paragraph(_mixed_text('小计'), styles['CellStyleCenter']),
@@ -710,7 +727,7 @@ def build_custom_template(data, styles):
 
         for idx, item in enumerate(cat_items, 1):
             std_price = item.get('标准价', 0)
-            discount = item.get('折扣', 0)
+            deal_price_factor = get_deal_price_factor(item)
             qty = item.get('数量', 1)
 
             if std_price == '赠送' or std_price is None:
@@ -718,9 +735,8 @@ def build_custom_template(data, styles):
                 subtotal = '赠送'
             else:
                 std_price_d = Decimal(str(std_price))
-                discount_d = Decimal(str(discount))
                 qty_d = Decimal(str(qty))
-                actual_price_d = (std_price_d * (1 - discount_d)).quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)
+                actual_price_d = calc_actual_price(std_price_d, deal_price_factor)
                 subtotal_d = (actual_price_d * qty_d).quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)
                 actual_price = float(actual_price_d)
                 subtotal = float(subtotal_d)
@@ -732,7 +748,7 @@ def build_custom_template(data, styles):
                 Paragraph(_mixed_text(item.get('商品名称', '')), styles['CellStyle']),
                 Paragraph(_mixed_text(item.get('单位', '')), styles['CellStyleCenter']),
                 Paragraph(_mixed_text(fmt_money(std_price)), styles['CellStyleRight']),
-                Paragraph(_mixed_text(fmt_pct(discount)), styles['CellStyleCenter']),
+                Paragraph(_mixed_text(fmt_pct(deal_price_factor)), styles['CellStyleCenter']),
                 Paragraph(_mixed_text(qty), styles['CellStyleCenter']),
                 Paragraph(_mixed_text(fmt_money(actual_price)), styles['CellStyleRight']),
                 Paragraph(_mixed_text(fmt_money(subtotal)), styles['CellStyleRight']),
@@ -898,7 +914,7 @@ def _xl_write_item_table(ws, items, start_row, sheet_name='', compute_values=Fal
     """
     向 worksheet 写入报价明细表。
     列：A=序号, B=商品分类, C=商品名称, D=单位, E=标准价,
-        F=折扣, G=数量, H=实际价, I=小计
+        F=成交价系数, G=数量, H=实际价, I=小计
     compute_values=True 时直接写计算后的数值（兼容性更好），
     否则写 Excel 公式（便于手动调整）。
     返回: (最后数据行号, 合计行号)
@@ -906,7 +922,7 @@ def _xl_write_item_table(ws, items, start_row, sheet_name='', compute_values=Fal
     from openpyxl.styles import Font, PatternFill, Alignment
 
     # 表头
-    headers = ['序号', '商品分类', '商品名称', '单位', '标准价', '折扣', '数量', '实际价', '小计']
+    headers = ['序号', '商品分类', '商品名称', '单位', '标准价', '成交价系数', '数量', '实际价', '小计']
     for col_idx, h in enumerate(headers, 1):
         cell = ws.cell(row=start_row, column=col_idx, value=h)
         _xl_header_style(cell)
@@ -917,7 +933,7 @@ def _xl_write_item_table(ws, items, start_row, sheet_name='', compute_values=Fal
 
     for idx, item in enumerate(items, 1):
         std_price = item.get('标准价', 0)
-        discount = item.get('折扣', 0)
+        deal_price_factor = get_deal_price_factor(item)
         qty = item.get('数量', 1)
         is_gift = (std_price == '赠送' or std_price is None)
 
@@ -948,12 +964,12 @@ def _xl_write_item_table(ws, items, start_row, sheet_name='', compute_values=Fal
             c = ws.cell(row=current_row, column=5, value=float(std_price))
             _xl_data_style(c, align='right', bg=bg, num_format='#,##0.00')
 
-        # F: 折扣（存为小数，格式化为百分比）
-        if is_gift or discount == 0:
+        # F: 成交价系数（存为小数，格式化为百分比）
+        if is_gift:
             c = ws.cell(row=current_row, column=6, value='-')
             _xl_data_style(c, align='center', bg=bg)
         else:
-            c = ws.cell(row=current_row, column=6, value=float(discount))
+            c = ws.cell(row=current_row, column=6, value=float(deal_price_factor))
             _xl_data_style(c, align='center', bg=bg, num_format='0%')
 
         # G: 数量
@@ -965,16 +981,12 @@ def _xl_write_item_table(ws, items, start_row, sheet_name='', compute_values=Fal
             c = ws.cell(row=current_row, column=8, value='赠送')
             _xl_data_style(c, align='center', bg=bg)
         elif compute_values:
-            actual = float(std_price) * (1 - float(discount)) if discount else float(std_price)
+            actual = float(std_price) * float(deal_price_factor)
             c = ws.cell(row=current_row, column=8, value=round(actual, 2))
-            _xl_data_style(c, align='right', bg=bg, num_format='#,##0.00')
-        elif discount == 0:
-            c = ws.cell(row=current_row, column=8,
-                        value=f'=E{current_row}')
             _xl_data_style(c, align='right', bg=bg, num_format='#,##0.00')
         else:
             c = ws.cell(row=current_row, column=8,
-                        value=f'=E{current_row}*(1-F{current_row})')
+                        value=f'=E{current_row}*F{current_row}')
             _xl_data_style(c, align='right', bg=bg, num_format='#,##0.00')
 
         # I: 小计
@@ -982,7 +994,7 @@ def _xl_write_item_table(ws, items, start_row, sheet_name='', compute_values=Fal
             c = ws.cell(row=current_row, column=9, value='赠送')
             _xl_data_style(c, align='center', bg=bg)
         elif compute_values:
-            actual = float(std_price) * (1 - float(discount)) if discount else float(std_price)
+            actual = float(std_price) * float(deal_price_factor)
             subtotal = round(actual * int(qty), 2)
             c = ws.cell(row=current_row, column=9, value=subtotal)
             _xl_data_style(c, align='right', bg=bg, num_format='#,##0.00')
@@ -1031,7 +1043,7 @@ def _xl_set_col_widths(ws):
         'C': 24,  # 商品名称
         'D': 10,  # 单位
         'E': 14,  # 标准价
-        'F': 9,   # 折扣
+        'F': 9,   # 成交价系数
         'G': 8,   # 数量
         'H': 14,  # 实际价
         'I': 16,  # 小计
@@ -1112,10 +1124,10 @@ def generate_xlsx_standard(data, output_path):
     total_val = Decimal('0')
     for item in items:
         sp = item.get('标准价', 0)
-        disc = item.get('折扣', 0)
+        deal_price_factor = get_deal_price_factor(item)
         qty = item.get('数量', 1)
         if sp != '赠送' and sp is not None:
-            ap = (Decimal(str(sp)) * (1 - Decimal(str(disc)))).quantize(Decimal('0.00'))
+            ap = calc_actual_price(sp, deal_price_factor)
             total_val += ap * Decimal(str(qty))
 
     chinese_amt = number_to_chinese(float(total_val))
@@ -1246,23 +1258,25 @@ def generate_xlsx_custom(data, output_path):
 
     # ── 各分类 Sheet ──
     # 门店软件套餐 + 门店增值模块 合并为一个 Sheet；硬件设备不纳入报价
-    # 定价规则：软件/总部 → qty=1, 折扣20%；实施服务 → qty=1, 无折扣
+    # 定价规则：软件/总部 → qty=1, 成交价系数80%；实施服务 → qty=1, 标准价
 
-    def _override_items(src_items, discount, qty=1):
-        """返回 qty/discount 覆盖后的副本（刊例价展示用）"""
+    def _override_items(src_items, deal_price_factor, qty=1):
+        """返回 qty/成交价系数 覆盖后的副本（刊例价展示用）"""
         result = []
         for it in src_items:
             ni = dict(it)
             ni['数量'] = qty
             if ni.get('标准价') not in ('赠送', None):
-                ni['折扣'] = discount
+                ni['deal_price_factor'] = deal_price_factor
+                ni['成交价系数'] = deal_price_factor
+                ni['折扣'] = round(1 - deal_price_factor, 6)
             result.append(ni)
         return result
 
     MERGED_SHEET_CATS = ['门店软件套餐', '门店增值模块']
     cat_totals = {}  # {cat_name: (total_cell_ref, sheet_title)}
 
-    # ── 合并 Sheet：门店软件与增值（qty=1, 折扣20%）──
+    # ── 合并 Sheet：门店软件与增值（qty=1, 成交价系数80%）──
     merged_has_items = any(categories[c] for c in MERGED_SHEET_CATS)
     if merged_has_items:
         ws_merged = wb.create_sheet('门店软件与增值')
@@ -1290,14 +1304,14 @@ def generate_xlsx_custom(data, output_path):
             ws_merged.row_dimensions[section_row].height = 18
             section_row += 1
 
-            display_items = _override_items(cat_items, discount=0.2, qty=1)
+            display_items = _override_items(cat_items, deal_price_factor=0.8, qty=1)
             _, total_row = _xl_write_item_table(ws_merged, display_items, section_row, compute_values=True)
             cat_totals[cat_name] = (f'I{total_row}', ws_merged.title)
             section_row = total_row + 2
 
         ws_merged.freeze_panes = 'A4'
 
-    # ── 总部模块 Sheet（qty=1, 折扣20%）──
+    # ── 总部模块 Sheet（qty=1, 成交价系数80%）──
     if categories.get('总部模块'):
         ws = wb.create_sheet('总部模块')
         ws.sheet_view.showGridLines = False
@@ -1307,12 +1321,12 @@ def generate_xlsx_custom(data, output_path):
         _xl_title_style(c, size=14)
         ws.row_dimensions[1].height = 30
         ws.row_dimensions[2].height = 8
-        display_items = _override_items(categories['总部模块'], discount=0.2, qty=1)
+        display_items = _override_items(categories['总部模块'], deal_price_factor=0.8, qty=1)
         _, total_row = _xl_write_item_table(ws, display_items, 3, compute_values=True)
         ws.freeze_panes = 'A4'
         cat_totals['总部模块'] = (f'I{total_row}', ws.title)
 
-    # ── 实施服务 Sheet（qty=1, 无折扣）──
+    # ── 实施服务 Sheet（qty=1, 标准价）──
     if categories.get('实施服务'):
         ws = wb.create_sheet('实施服务')
         ws.sheet_view.showGridLines = False
@@ -1322,7 +1336,7 @@ def generate_xlsx_custom(data, output_path):
         _xl_title_style(c, size=14)
         ws.row_dimensions[1].height = 30
         ws.row_dimensions[2].height = 8
-        display_items = _override_items(categories['实施服务'], discount=0, qty=1)
+        display_items = _override_items(categories['实施服务'], deal_price_factor=1.0, qty=1)
         _, total_row = _xl_write_item_table(ws, display_items, 3, compute_values=True)
         ws.freeze_panes = 'A4'
         cat_totals['实施服务'] = (f'I{total_row}', ws.title)
@@ -1397,10 +1411,10 @@ def _xl_add_tiered_sheet(wb, data):
 
     # 表头
     def tier_label(t):
-        d = t.get('折扣', 0)
-        if d == 0:
+        d = get_deal_price_factor(t)
+        if d == 1:
             return f"{t['标签']}（标准价）"
-        zhe = round((1 - d) * 10, 1)
+        zhe = round(d * 10, 1)
         zhe_str = f"{int(zhe)}折" if zhe == int(zhe) else f"{zhe}折"
         return f"{t['标签']}（{zhe_str}）"
 
@@ -1473,9 +1487,9 @@ def _xl_add_tiered_sheet(wb, data):
                 c.number_format = '#,##0.00'
                 c.alignment = Alignment(horizontal='right', vertical='center')
                 for ti, t in enumerate(tiers):
-                    d = Decimal(str(t.get('折扣', 0))) if apply_tier_discount else Decimal('0')
+                    d = Decimal(str(get_deal_price_factor(t))) if apply_tier_discount else Decimal('1')
                     qty = Decimal(str(t['门店数'])) if is_per_store else Decimal(str(item_qty))
-                    actual = (std_d * (1 - d)).quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)
+                    actual = calc_actual_price(std_d, d)
                     subtotal = (actual * qty).quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)
                     cat_tier_totals[ti] += subtotal
                     c = ws.cell(row=current_row, column=4 + ti, value=float(subtotal))
@@ -1555,7 +1569,7 @@ def calc_profit(data, cost_data):
     for item in items:
         name = item.get('商品名称', '')
         std_price = item.get('标准价', 0)
-        discount = item.get('折扣', 0)
+        deal_price_factor = get_deal_price_factor(item)
         qty = item.get('数量', 1)
 
         if std_price == '赠送' or std_price is None:
@@ -1563,9 +1577,8 @@ def calc_profit(data, cost_data):
             continue
 
         std_price_d = Decimal(str(std_price))
-        discount_d = Decimal(str(discount))
         qty_d = Decimal(str(qty))
-        actual_price = (std_price_d * (1 - discount_d)).quantize(Decimal('0.00'))
+        actual_price = calc_actual_price(std_price_d, deal_price_factor)
 
         # 查找底价
         cost_key = name

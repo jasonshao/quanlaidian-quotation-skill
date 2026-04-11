@@ -122,18 +122,18 @@
     },
     {
       "id": "pricing",
-      "title": "折扣与报价策略",
+      "title": "成交价系数与报价策略",
       "fields": [
         {
-          "key": "折扣",
-          "label": "折扣",
+          "key": "成交价系数",
+          "label": "成交价系数",
           "component": "percentage",
           "value_type": "number",
           "required": false,
-          "minimum": 0,
-          "maximum": 0.95,
+          "minimum": 0.01,
+          "maximum": 1,
           "default_from": "按门店数量自动推荐",
-          "warning_when": "超出建议范围时提示特批风险"
+          "warning_when": "超出建议范围时提示特批风险，人工改价必须填写原因"
         },
         {
           "key": "是否启用阶梯报价",
@@ -183,7 +183,7 @@
     "conditional_rules": [
       "勾选总部模块后，才要求填写对应数量字段",
       "餐饮类型必须与套餐和模块匹配",
-      "折扣超出建议范围时给出风险提示，不阻断生成"
+      "成交价系数超出建议范围时给出风险提示，不阻断生成"
     ]
   },
   "output_files": [

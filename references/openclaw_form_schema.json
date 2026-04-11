@@ -36,7 +36,7 @@
       "required": true,
       "minimum": 1,
       "placeholder": "例如：20",
-      "help_text": "用于推荐折扣，并决定标准模板还是定制模板。"
+      "help_text": "用于推荐成交价系数，并决定标准模板还是定制模板。"
     },
     {
       "key": "门店套餐",
@@ -107,15 +107,15 @@
       "help_text": "仅在勾选“生产加工”总部模块时展示。"
     },
     {
-      "key": "折扣",
-      "label": "折扣",
+      "key": "成交价系数",
+      "label": "成交价系数",
       "type": "number",
       "component": "percentage",
       "required": false,
-      "minimum": 0,
-      "maximum": 0.95,
+      "minimum": 0.01,
+      "maximum": 1,
       "default_from": "按门店数量自动推荐",
-      "help_text": "系统先推荐折扣，销售可手动微调。"
+      "help_text": "成交价系数 = 成交价 / 标准价。例如 0.25 表示按标准价25%成交。人工改价必须填写原因。"
     },
     {
       "key": "是否启用阶梯报价",

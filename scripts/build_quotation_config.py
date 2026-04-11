@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
-import math
 import re
-import statistics
-from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -13,7 +10,65 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 REFERENCES_DIR = ROOT_DIR / "references"
 PRODUCT_CATALOG_PATH = REFERENCES_DIR / "product_catalog.md"
 DISCOUNT_RULES_PATH = REFERENCES_DIR / "discount_rules.json"
-HISTORY_CASEBASE_PATH = ROOT_DIR / "data" / "history_quote_cases.jsonl"
+SMALL_SEGMENT_MAX_STORES = 30
+DEFAULT_SMALL_SEGMENT_ENABLED = True
+SMALL_SEGMENT_ALGORITHM_VERSION = "small-segment-v1"
+HISTORY_WINDOW_MONTHS = 12
+SMALL_SEGMENT_START_UNIT_PRICE = {
+    "轻餐": 1800,
+    "正餐": 3000,
+}
+
+PROTECTED_PRODUCT_NAMES = {
+    "财务通",
+    "物流通",
+    "商管接口",
+    "公共-财务通",
+    "公共-物流通",
+}
+
+
+def is_protected_product(product_name):
+    return any(keyword in str(product_name) for keyword in PROTECTED_PRODUCT_NAMES)
+
+
+def as_bool(value, default=True):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def now_dt():
+    return datetime.now()
+
+
+def parse_date_maybe(value):
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    patterns = [
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%Y.%m.%d",
+        "%Y%m%d",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y/%m/%d %H:%M:%S",
+    ]
+    for p in patterns:
+        try:
+            return datetime.strptime(text, p)
+        except ValueError:
+            continue
+    return None
 
 
 def parse_money(value):
@@ -110,24 +165,9 @@ def load_discount_rules(path=DISCOUNT_RULES_PATH):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def load_history_casebase(path=HISTORY_CASEBASE_PATH):
-    path = Path(path)
-    if not path.exists():
-        return []
-    rows = []
-    with path.open("r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            rows.append(json.loads(line))
-    return rows
-
-
 def parse_store_scale(scale_text):
-    match = re.match(r"(\d+)店以上", scale_text)
-    if match:
-        return int(match.group(1)) + 1, None
+    if scale_text == "300店以上":
+        return 301, None
     matched = re.match(r"(\d+)-(\d+)店", scale_text)
     if not matched:
         raise ValueError(f"无法解析门店规模规则: {scale_text}")
@@ -145,6 +185,219 @@ def recommend_discount(store_count, rules=None):
     return 0
 
 
+def _small_segment_bucket(store_count):
+    if 1 <= store_count <= 10:
+        return "small-1-10"
+    # 21-30 延续 11-20 同桶规则，避免小样本分裂
+    if 11 <= store_count <= 30:
+        return "small-11-20"
+    return None
+
+
+def recommend_base_deal_price_factor_smooth(store_count, meal_type):
+    # 新起步锚点：
+    # 轻餐 1 店 1800，正餐 1 店 3000
+    start_factor_map = {
+        "轻餐": SMALL_SEGMENT_START_UNIT_PRICE["轻餐"] / 6900,
+        "正餐": SMALL_SEGMENT_START_UNIT_PRICE["正餐"] / 9900,
+    }
+    start_factor = start_factor_map[meal_type]
+    # 沿用原有斜率：每跨 19 店总下降 0.05
+    if store_count <= 20:
+        return start_factor - 0.05 * (store_count - 1) / 19
+    if store_count <= 30:
+        step = 0.05 / 19
+        factor_at_20 = start_factor - 0.05
+        return factor_at_20 - step * (store_count - 20)
+    raise ValueError("31店及以上暂不受理，请转人工定价")
+
+
+def small_segment_bounds(store_count, meal_type):
+    center = recommend_base_deal_price_factor_smooth(store_count, meal_type)
+    bandwidth = 0.02 if meal_type == "轻餐" else 0.015
+    low = max(0.01, center - bandwidth)
+    high = min(1.0, center + bandwidth)
+    return round(low, 6), round(high, 6)
+
+
+def percentile(sorted_values, q):
+    if not sorted_values:
+        return None
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    pos = (len(sorted_values) - 1) * q
+    lo = int(pos)
+    hi = min(lo + 1, len(sorted_values) - 1)
+    frac = pos - lo
+    return sorted_values[lo] * (1 - frac) + sorted_values[hi] * frac
+
+
+def weighted_median(values, weights):
+    if not values:
+        return None
+    pairs = sorted(zip(values, weights), key=lambda x: x[0])
+    total_w = sum(w for _, w in pairs)
+    if total_w <= 0:
+        return pairs[len(pairs) // 2][0]
+    acc = 0.0
+    half = total_w / 2
+    for value, weight in pairs:
+        acc += weight
+        if acc >= half:
+            return value
+    return pairs[-1][0]
+
+
+def get_history_samples(form):
+    samples = form.get("history_samples")
+    if samples is None:
+        samples = form.get("历史样本")
+    if samples is None:
+        return []
+    if not isinstance(samples, list):
+        raise ValueError("history_samples/历史样本 必须是数组")
+    return samples
+
+
+def extract_sample_factor(sample):
+    if sample.get("deal_price_factor") is not None:
+        return float(sample["deal_price_factor"])
+    if sample.get("成交价系数") is not None:
+        return float(sample["成交价系数"])
+    if sample.get("折扣") is not None:
+        return 1 - float(sample["折扣"])
+    return None
+
+
+def should_filter_history_sample(sample, meal_type, sample_bucket):
+    if as_bool(sample.get("special_approval") or sample.get("特殊审批单"), False):
+        return "special_approval"
+    if as_bool(sample.get("is_gift") or sample.get("赠送单"), False):
+        return "gift"
+    if as_bool(sample.get("abnormal_manual_override") or sample.get("人工异常改价单"), False):
+        return "abnormal_manual_override"
+    if as_bool(sample.get("incomplete") or sample.get("数据不完整"), False):
+        return "incomplete_data"
+    if as_bool(sample.get("non_standard_package") or sample.get("非标准套餐"), False):
+        return "non_standard_package"
+    if sample.get("meal_type") and str(sample.get("meal_type")) != meal_type:
+        return "cross_meal_type"
+
+    sc = sample.get("store_count") or sample.get("门店数量")
+    if sc is None:
+        return "missing_store_count"
+    sc = int(sc)
+    if sc <= 0:
+        return "invalid_store_count"
+    if sc > SMALL_SEGMENT_MAX_STORES:
+        return "out_of_small_segment"
+
+    bucket = _small_segment_bucket(sc)
+    if sample_bucket and bucket != sample_bucket:
+        return "cross_bucket"
+
+    dt = parse_date_maybe(
+        sample.get("date")
+        or sample.get("deal_date")
+        or sample.get("quote_date")
+        or sample.get("成交日期")
+    )
+    if dt is None:
+        return "missing_date"
+    days = (now_dt().date() - dt.date()).days
+    if days < 0:
+        return "future_date"
+    if days > HISTORY_WINDOW_MONTHS * 31:
+        return "out_of_window"
+
+    factor = extract_sample_factor(sample)
+    if factor is None:
+        return "missing_factor"
+    if not 0 < factor <= 1:
+        return "invalid_factor"
+    return None
+
+
+def time_decay_weight(sample):
+    dt = parse_date_maybe(
+        sample.get("date")
+        or sample.get("deal_date")
+        or sample.get("quote_date")
+        or sample.get("成交日期")
+    )
+    if dt is None:
+        return 0.0
+    age_days = (now_dt().date() - dt.date()).days
+    # 12 个月线性衰减，保留最小权重避免完全失声
+    base = max(0.1, 1 - age_days / float(HISTORY_WINDOW_MONTHS * 31))
+    return round(base, 6)
+
+
+def summarize_reasons(reason_list):
+    counter = {}
+    for reason in reason_list:
+        counter[reason] = counter.get(reason, 0) + 1
+    return [{"reason": k, "count": v} for k, v in sorted(counter.items(), key=lambda x: x[0])]
+
+
+def history_weight_cap(sample_count):
+    if sample_count < 6:
+        return 0.0
+    if sample_count <= 12:
+        return 0.15
+    return 0.25
+
+
+def apply_history_adjustment(form, meal_type, sample_bucket, base_factor):
+    raw_samples = get_history_samples(form)
+    if not raw_samples:
+        return {
+            "final_factor": round(base_factor, 6),
+            "history_sample_count": 0,
+            "history_weight": 0.0,
+            "history_anchor": None,
+            "history_filtered_reason_summary": [],
+        }
+
+    accepted = []
+    filtered_reasons = []
+    for sample in raw_samples:
+        reason = should_filter_history_sample(sample, meal_type, sample_bucket)
+        if reason is not None:
+            filtered_reasons.append(reason)
+            continue
+        accepted.append(sample)
+
+    sample_count = len(accepted)
+    cap = history_weight_cap(sample_count)
+    if cap == 0.0:
+        return {
+            "final_factor": round(base_factor, 6),
+            "history_sample_count": sample_count,
+            "history_weight": 0.0,
+            "history_anchor": None,
+            "history_filtered_reason_summary": summarize_reasons(filtered_reasons),
+        }
+
+    factors = [extract_sample_factor(s) for s in accepted]
+    factors_sorted = sorted(factors)
+    lo = percentile(factors_sorted, 0.1)
+    hi = percentile(factors_sorted, 0.9)
+    # 轻量 winsorize，降低极端低价/高价噪声影响
+    winsorized = [min(hi, max(lo, f)) for f in factors]
+    weights = [time_decay_weight(s) for s in accepted]
+    anchor = weighted_median(winsorized, weights)
+
+    final = base_factor * (1 - cap) + anchor * cap
+    return {
+        "final_factor": round(final, 6),
+        "history_sample_count": sample_count,
+        "history_weight": round(cap, 6),
+        "history_anchor": round(anchor, 6),
+        "history_filtered_reason_summary": summarize_reasons(filtered_reasons),
+    }
+
+
 def build_product_index(products):
     index = {}
     for product in products:
@@ -152,203 +405,52 @@ def build_product_index(products):
     return index
 
 
-def clamp_discount(discount, rules):
-    upper = rules["折扣上限"]["软件套餐最大折扣"]
-    return max(0.0, min(round(float(discount), 4), upper))
+def _normalize_manual_reason(form):
+    return str(
+        form.get("人工改价原因")
+        or form.get("manual_override_reason")
+        or form.get("manual_override_reason_text")
+        or ""
+    ).strip()
 
 
-def clamp_discount_range(discount, lower_bound, upper_bound):
-    return round(max(float(lower_bound), min(float(discount), float(upper_bound))), 4)
+def _extract_deal_price_factor_input(form):
+    if form.get("deal_price_factor") is not None:
+        return float(form["deal_price_factor"]), "deal_price_factor"
+    if form.get("成交价系数") is not None:
+        return float(form["成交价系数"]), "成交价系数"
+    if form.get("折扣") is not None:
+        # 兼容旧字段语义：折扣是减免比例，转换为成交价系数
+        return 1 - float(form["折扣"]), "折扣(兼容转换)"
+    return None, None
 
 
-def get_history_fit_params(meal_type, rules):
-    defaults = {
-        "最大历史权重": 0.75,
-        "样本饱和值": 6,
-        "样本置信权重": 0.55,
-        "均匀度置信权重": 0.45,
-        "均值权重基础": 0.35,
-        "均值权重均匀度增益": 0.35,
-    }
-    params = dict(defaults)
-    params.update(rules.get("历史拟合参数", {}).get(meal_type, {}))
-    return params
-
-
-def get_history_fit_bounds(store_count, meal_type, rules):
-    meal_bounds = rules.get("历史拟合折扣约束", {}).get(meal_type, [])
-    for row in meal_bounds:
-        start, end = parse_store_scale(row["规模"])
-        if end is None and store_count >= start:
-            return float(row["最小折扣"]), float(row["最大折扣"])
-        if start <= store_count <= end:
-            return float(row["最小折扣"]), float(row["最大折扣"])
-    upper = float(rules["折扣上限"]["软件套餐最大折扣"])
-    return 0.0, upper
-
-
-def _extract_package_unit_price(case, package_name):
-    for item in case.get("line_items", []):
-        if item.get("product_name") != package_name:
-            continue
-        quantity = item.get("quantity")
-        subtotal = item.get("subtotal")
-        if isinstance(quantity, (int, float)) and quantity > 0 and isinstance(subtotal, (int, float)):
-            per_unit = float(subtotal) / float(quantity)
-            if per_unit > 0:
-                return per_unit
-        unit_price = item.get("discounted_unit_price")
-        if isinstance(unit_price, (int, float)) and unit_price > 0:
-            return float(unit_price)
-    return None
-
-
-def collect_package_price_samples(package_name, meal_type, casebase):
-    samples = []
-    for case in casebase or []:
-        if case.get("raw_extract_status") != "parsed":
-            continue
-        if case.get("selected_package") != package_name:
-            continue
-        if meal_type and case.get("meal_type") not in (meal_type, None):
-            continue
-        store_count = case.get("store_count")
-        if not isinstance(store_count, int) or store_count <= 0:
-            continue
-        unit_price = _extract_package_unit_price(case, package_name)
-        if unit_price is None:
-            continue
-        samples.append({
-            "store_count": store_count,
-            "unit_price": round(unit_price, 2),
-        })
-    return samples
-
-
-def _sample_weight(target_store_count, sample_store_count):
-    if target_store_count <= 0 or sample_store_count <= 0:
-        return 0.0
-    distance = abs(math.log1p(target_store_count) - math.log1p(sample_store_count))
-    return 1.0 / (1.0 + distance)
-
-
-def _weighted_mean(samples, target_store_count):
-    weighted_total = 0.0
-    weight_sum = 0.0
-    for sample in samples:
-        weight = _sample_weight(target_store_count, sample["store_count"])
-        weighted_total += sample["unit_price"] * weight
-        weight_sum += weight
-    if weight_sum == 0:
-        return 0.0
-    return weighted_total / weight_sum
-
-
-def _weighted_median(samples, target_store_count):
-    weighted = []
-    for sample in samples:
-        weight = _sample_weight(target_store_count, sample["store_count"])
-        weighted.append((sample["unit_price"], weight))
-    weighted.sort(key=lambda item: item[0])
-    total_weight = sum(weight for _, weight in weighted)
-    if total_weight == 0:
-        return 0.0
-    threshold = total_weight / 2
-    running = 0.0
-    for value, weight in weighted:
-        running += weight
-        if running >= threshold:
-            return value
-    return weighted[-1][0]
-
-
-def _distribution_uniformity(samples):
-    if not samples:
-        return 0.0
-    counter = Counter(sample["store_count"] for sample in samples)
-    unique_factor = min(1.0, len(counter) / 5.0)
-    if len(counter) == 1:
-        entropy_factor = 0.0
-    else:
-        total = sum(counter.values())
-        entropy = -sum((count / total) * math.log(count / total) for count in counter.values())
-        entropy_factor = entropy / math.log(len(counter))
-    return round(0.5 * unique_factor + 0.5 * entropy_factor, 4)
-
-
-def recommend_discount_from_history(store_count, package, meal_type, rules=None, casebase=None):
-    rules = rules or load_discount_rules()
-    base_discount = recommend_discount(store_count, rules=rules)
-    standard_price = float(package["price"])
-    base_unit_price = standard_price * base_discount
-    samples = collect_package_price_samples(package["name"], meal_type, casebase or [])
-    fit_params = get_history_fit_params(meal_type, rules)
-    lower_bound, upper_bound = get_history_fit_bounds(store_count, meal_type, rules)
-    pricing_info = {
-        "基础折扣": round(base_discount, 4),
-        "建议折扣": round(base_discount, 4),
-        "历史拟合折扣": round(base_discount, 4),
-        "最终折扣": round(base_discount, 4),
-        "历史样本数": len(samples),
-        "历史拟合已启用": False,
-        "历史均值单价": None,
-        "历史中位数单价": None,
-        "拟合单价": round(base_unit_price, 2),
-        "历史权重": 0.0,
-        "分布均匀度": 0.0,
-        "历史拟合参数体系": meal_type,
-        "历史拟合折扣下限": round(lower_bound, 4),
-        "历史拟合折扣上限": round(upper_bound, 4),
-    }
-    if len(samples) < 2:
-        return pricing_info
-
-    weighted_mean = _weighted_mean(samples, store_count)
-    weighted_median = _weighted_median(samples, store_count)
-    uniformity = _distribution_uniformity(samples)
-    sample_factor = min(1.0, len(samples) / float(fit_params["样本饱和值"]))
-    confidence = min(
-        1.0,
-        float(fit_params["样本置信权重"]) * sample_factor
-        + float(fit_params["均匀度置信权重"]) * uniformity,
-    )
-    mean_weight = float(fit_params["均值权重基础"]) + float(fit_params["均值权重均匀度增益"]) * uniformity
-    history_anchor = weighted_mean * mean_weight + weighted_median * (1.0 - mean_weight)
-    history_weight = min(float(fit_params["最大历史权重"]), float(fit_params["最大历史权重"]) * confidence)
-    fitted_unit_price = base_unit_price * (1.0 - history_weight) + history_anchor * history_weight
-    fitted_discount = clamp_discount(fitted_unit_price / standard_price, rules)
-    fitted_discount = clamp_discount_range(fitted_discount, lower_bound, upper_bound)
-
-    pricing_info.update({
-        "建议折扣": fitted_discount,
-        "历史拟合折扣": fitted_discount,
-        "历史拟合已启用": True,
-        "历史均值单价": round(weighted_mean, 2),
-        "历史中位数单价": round(weighted_median, 2),
-        "拟合单价": round(fitted_unit_price, 2),
-        "历史权重": round(history_weight, 4),
-        "分布均匀度": round(uniformity, 4),
-    })
-    return pricing_info
-
-
-def resolve_discount(form, package, rules, casebase=None):
+def normalize_deal_price_factor(form, rules, route_strategy):
     store_count = int(form["门店数量"])
-    pricing_info = recommend_discount_from_history(
-        store_count,
-        package=package,
-        meal_type=form["餐饮类型"],
-        rules=rules,
-        casebase=casebase,
-    )
-    recommended = pricing_info["建议折扣"]
-    discount = form.get("折扣", recommended)
-    discount = float(discount)
-    if not 0 <= discount <= rules["折扣上限"]["软件套餐最大折扣"]:
-        raise ValueError("折扣超出系统允许上限")
-    discount = round(discount, 4)
-    pricing_info["最终折扣"] = discount
-    return pricing_info, discount
+    meal_type = form["餐饮类型"]
+    legacy_recommended_discount = recommend_discount(store_count, rules=rules)
+    legacy_recommended_factor = 1 - float(legacy_recommended_discount)
+    provided_factor, source = _extract_deal_price_factor_input(form)
+
+    if route_strategy == "small-segment":
+        recommended_factor = recommend_base_deal_price_factor_smooth(store_count, meal_type)
+        if provided_factor is None:
+            return round(recommended_factor, 6), round(recommended_factor, 6), "auto"
+        reason = _normalize_manual_reason(form)
+        if not reason:
+            raise ValueError("人工改价必须填写原因")
+        if not 0 < provided_factor <= 1:
+            raise ValueError("成交价系数必须在 (0, 1] 区间")
+        return round(recommended_factor, 6), round(float(provided_factor), 6), source
+
+    if provided_factor is None:
+        return round(legacy_recommended_factor, 6), round(legacy_recommended_factor, 6), "auto-legacy"
+    reason = _normalize_manual_reason(form)
+    if not reason:
+        raise ValueError("人工改价必须填写原因")
+    if not 0 < provided_factor <= 1:
+        raise ValueError("成交价系数必须在 (0, 1] 区间")
+    return round(legacy_recommended_factor, 6), round(float(provided_factor), 6), source
 
 
 def lookup_product(index, name, meal_type=None, group=None):
@@ -362,7 +464,32 @@ def lookup_product(index, name, meal_type=None, group=None):
     return candidates[0]
 
 
-def validate_form(form, product_index, rules, casebase=None):
+def determine_route_strategy(form):
+    store_count = int(form["门店数量"])
+    small_segment_enabled = as_bool(form.get("small_segment_enabled"), default=DEFAULT_SMALL_SEGMENT_ENABLED)
+    if store_count > SMALL_SEGMENT_MAX_STORES:
+        return "unsupported", "store_count_gt_30"
+    if not small_segment_enabled:
+        return "legacy", "small_segment_enabled=false"
+
+    non_standard_flags = [
+        "多年合同特殊政策",
+        "续约增购特价",
+        "区域价差",
+        "渠道价差",
+        "硬件报价",
+        "特殊审批商品",
+        "特殊商务条款",
+        "复杂联购组合",
+        "跨餐饮类型混合套餐",
+    ]
+    for flag in non_standard_flags:
+        if bool(form.get(flag)):
+            return "legacy", f"non_standard_flag:{flag}"
+    return "small-segment", "store_count_le_30_standard_scope"
+
+
+def validate_form(form, product_index, rules, route_strategy):
     required = ["客户品牌名称", "餐饮类型", "门店数量", "门店套餐"]
     missing = [key for key in required if form.get(key) in (None, "", [])]
     if missing:
@@ -374,38 +501,76 @@ def validate_form(form, product_index, rules, casebase=None):
 
     if int(form["门店数量"]) <= 0:
         raise ValueError("门店数量必须大于 0")
+    if int(form["门店数量"]) > SMALL_SEGMENT_MAX_STORES:
+        raise ValueError("31店及以上暂不受理，请转人工定价")
+
+    recommended_factor, chosen_factor, factor_source = normalize_deal_price_factor(form, rules, route_strategy)
 
     package = lookup_product(product_index, form["门店套餐"], group="门店套餐")
     if package["meal_type"] != meal_type:
         raise ValueError("餐饮类型与门店套餐不匹配")
 
-    pricing_info, discount = resolve_discount(form, package, rules, casebase=casebase)
-
-    for module_name in form.get("门店增值模块", []):
+    module_names = form.get("门店增值模块", [])
+    for module_name in module_names:
         module = lookup_product(product_index, module_name, group="门店增值模块")
         if module["meal_type"] != meal_type:
             raise ValueError("餐饮类型与门店增值模块不匹配")
 
+    protected_overrides = form.get("保护类商品改价", {}) or {}
+    if not isinstance(protected_overrides, dict):
+        raise ValueError("保护类商品改价字段必须为对象")
+    for item_name in protected_overrides.keys():
+        if is_protected_product(item_name):
+            raise ValueError("保护类商品不允许人工改价")
+
     headquarter_modules = form.get("总部模块", [])
     if headquarter_modules:
-        for field in ("配送中心数量", "生产加工中心数量"):
-            if field in form and int(form[field]) < 0:
-                raise ValueError(f"{field} 必须大于等于 0")
+        quantity_field_map = {
+            "配送中心": "配送中心数量",
+            "生产加工": "生产加工中心数量",
+        }
         for module_name in headquarter_modules:
+            quantity_field = quantity_field_map.get(module_name)
+            if quantity_field is None:
+                raise ValueError(f"总部模块不支持: {module_name}")
+            if quantity_field not in form:
+                raise ValueError(f"勾选总部模块后必须填写 {quantity_field}")
+            if int(form.get(quantity_field, 0)) <= 0:
+                raise ValueError(f"勾选总部模块后 {quantity_field} 必须大于 0")
             lookup_product(product_index, module_name, meal_type=meal_type, group="总部模块")
+    for field in ("配送中心数量", "生产加工中心数量"):
+        if field in form and int(form[field]) < 0:
+            raise ValueError(f"{field} 必须大于等于 0")
 
-    return package, pricing_info, discount
+    implementation_type = (form.get("实施服务类型") or "").strip()
+    implementation_days = int(form.get("实施服务人天", 0) or 0)
+    if implementation_type and implementation_days <= 0:
+        raise ValueError("选择实施服务后必须填写实施服务人天")
+    if implementation_days > 0 and not implementation_type:
+        raise ValueError("填写实施服务人天时必须选择实施服务类型")
+
+    return {
+        "recommended_factor": recommended_factor,
+        "deal_price_factor": chosen_factor,
+        "factor_source": factor_source,
+    }
 
 
-def build_quote_item(product, quantity, discount, category, module_category):
+def build_quote_item(product, quantity, deal_price_factor, category, module_category):
+    protected = is_protected_product(product["name"])
+    item_factor = 1.0 if protected else deal_price_factor
     return {
         "商品分类": category,
         "商品名称": product["name"],
         "单位": product["unit"],
         "标准价": product["price"],
-        "折扣": discount,
+        "成交价系数": item_factor,
+        "deal_price_factor": item_factor,
+        # 兼容旧渲染字段，语义为折扣减免比例
+        "折扣": round(1 - item_factor, 6),
         "数量": quantity,
         "模块分类": module_category,
+        "protected_item_bypass": protected,
     }
 
 
@@ -419,46 +584,172 @@ def default_terms():
     ]
 
 
-def build_tier_config(enabled, rules, package=None, meal_type=None, casebase=None):
+def build_tier_config(enabled, rules):
     if not enabled:
         return []
-    candidates = [30, 50, 100]
+    candidates = [10, 20, 30]
     tiers = []
     for count in candidates:
         discount = recommend_discount(count, rules=rules)
-        if package and meal_type:
-            discount = recommend_discount_from_history(
-                count,
-                package=package,
-                meal_type=meal_type,
-                rules=rules,
-                casebase=casebase,
-            )["建议折扣"]
+        factor = round(1 - float(discount), 6)
         tiers.append({
             "标签": f"{count}店方案",
             "门店数": count,
+            "成交价系数": factor,
+            "deal_price_factor": factor,
             "折扣": discount,
         })
     return tiers
+
+
+def legacy_factor(store_count, rules):
+    return round(1 - float(recommend_discount(store_count, rules=rules)), 6)
+
+
+def build_manual_override_audit(form, recommended_factor, final_factor, bounded_range, factor_source):
+    reason = _normalize_manual_reason(form)
+    is_manual = factor_source not in {"auto", "auto-legacy"}
+    if not is_manual:
+        return {
+            "manual_override": False,
+            "manual_override_reason": None,
+            "manual_override_before_factor": None,
+            "manual_override_after_factor": None,
+            "manual_override_operator": None,
+            "manual_override_time": None,
+            "manual_override_outside_band": False,
+        }
+    operator = (
+        form.get("operator")
+        or form.get("操作人")
+        or form.get("sales_name")
+        or form.get("销售")
+        or "unknown"
+    )
+    op_time = (
+        form.get("manual_override_time")
+        or form.get("操作时间")
+        or form.get("override_time")
+        or now_dt().strftime("%Y-%m-%d %H:%M:%S")
+    )
+    out_of_band = False
+    if bounded_range:
+        out_of_band = final_factor < bounded_range[0] or final_factor > bounded_range[1]
+    return {
+        "manual_override": True,
+        "manual_override_reason": reason,
+        "manual_override_before_factor": round(recommended_factor, 6),
+        "manual_override_after_factor": round(final_factor, 6),
+        "manual_override_operator": str(operator),
+        "manual_override_time": str(op_time),
+        "manual_override_outside_band": out_of_band,
+    }
+
+
+def build_approval_decision(
+    route_strategy,
+    base_factor,
+    final_factor,
+    history_sample_count,
+    manual_override,
+    protected_item_bypass,
+):
+    reasons = []
+    if final_factor < (base_factor - 0.02):
+        reasons.append("final_factor_below_base_minus_0.02:director_approval")
+    elif final_factor < (base_factor - 0.01):
+        reasons.append("final_factor_below_base_minus_0.01:manager_approval")
+
+    if manual_override and history_sample_count < 6 and route_strategy == "small-segment":
+        reasons.append("manual_override_without_sufficient_history")
+
+    # 保护类商品已硬保护；这里保留审计提示，便于监控拦截链路
+    if protected_item_bypass:
+        reasons.append("protected_item_bypass_applied")
+
+    return {
+        "approval_required": len(reasons) > 0,
+        "approval_reason": reasons,
+    }
 
 
 def build_quotation_config(form, quote_date=None):
     products = load_product_catalog()
     product_index = build_product_index(products)
     rules = load_discount_rules()
-    history_casebase = load_history_casebase()
-    package, pricing_info, discount = validate_form(form, product_index, rules, casebase=history_casebase)
-
     meal_type = form["餐饮类型"]
     store_count = int(form["门店数量"])
+    route_strategy, route_reason = determine_route_strategy(form)
+    normalized = validate_form(form, product_index, rules, route_strategy)
+    deal_price_factor = normalized["deal_price_factor"]
+    recommended_factor = normalized["recommended_factor"]
+    sample_bucket = _small_segment_bucket(store_count) if route_strategy == "small-segment" else None
+    history_meta = {
+        "history_sample_count": 0,
+        "history_weight": 0.0,
+        "history_anchor": None,
+        "history_filtered_reason_summary": [],
+    }
+
+    if route_strategy == "small-segment":
+        base_for_history = deal_price_factor
+        # 仅在自动推荐时启用历史拟合，人工改价保持显式输入优先
+        if normalized["factor_source"] == "auto":
+            history_adjusted = apply_history_adjustment(
+                form=form,
+                meal_type=meal_type,
+                sample_bucket=sample_bucket,
+                base_factor=base_for_history,
+            )
+            deal_price_factor = history_adjusted["final_factor"]
+            history_meta = {
+                "history_sample_count": history_adjusted["history_sample_count"],
+                "history_weight": history_adjusted["history_weight"],
+                "history_anchor": history_adjusted["history_anchor"],
+                "history_filtered_reason_summary": history_adjusted["history_filtered_reason_summary"],
+            }
+        else:
+            history_meta = {
+                "history_sample_count": 0,
+                "history_weight": 0.0,
+                "history_anchor": None,
+                "history_filtered_reason_summary": [{"reason": "manual_override_skip_history", "count": 1}],
+            }
+
+    auto_adjustments = []
+    if route_strategy == "small-segment" and history_meta["history_weight"] > 0:
+        auto_adjustments.append({
+            "name": "history_adjustment",
+            "weight": history_meta["history_weight"],
+            "anchor": history_meta["history_anchor"],
+        })
+
+    bounded_range = None
+    if route_strategy == "small-segment":
+        lower, upper = small_segment_bounds(store_count, meal_type)
+        pre_bound_factor = deal_price_factor
+        bounded_factor = min(upper, max(lower, deal_price_factor))
+        deal_price_factor = round(bounded_factor, 6)
+        bounded_range = [lower, upper]
+        if round(pre_bound_factor, 6) != round(deal_price_factor, 6):
+            auto_adjustments.append({
+                "name": "bounded_clamp",
+                "before": round(pre_bound_factor, 6),
+                "after": round(deal_price_factor, 6),
+                "range": bounded_range,
+            })
+
     quote_date = quote_date or datetime.now().strftime("%Y年%m月%d日")
     items = []
 
-    items.append(build_quote_item(package, store_count, discount, "门店套餐", "门店软件套餐"))
+    package = lookup_product(product_index, form["门店套餐"], meal_type=meal_type, group="门店套餐")
+    items.append(build_quote_item(package, store_count, deal_price_factor, "标准软件套餐", "门店软件套餐"))
 
     for module_name in form.get("门店增值模块", []):
         module = lookup_product(product_index, module_name, meal_type=meal_type, group="门店增值模块")
-        items.append(build_quote_item(module, store_count, discount, "门店增值模块", "门店增值模块"))
+        item_factor = deal_price_factor if route_strategy != "small-segment" else min(1.0, round(deal_price_factor + 0.03, 6))
+        category = "保护类商品" if is_protected_product(module["name"]) else "增值模块"
+        items.append(build_quote_item(module, store_count, item_factor, category, "门店增值模块"))
 
     for module_name in form.get("总部模块", []):
         quantity_field = {
@@ -469,13 +760,38 @@ def build_quotation_config(form, quote_date=None):
         if quantity <= 0:
             continue
         module = lookup_product(product_index, module_name, meal_type=meal_type, group="总部模块")
-        items.append(build_quote_item(module, quantity, discount, "总部模块", "总部模块"))
+        category = "保护类商品" if is_protected_product(module["name"]) else "总部模块"
+        items.append(build_quote_item(module, quantity, deal_price_factor, category, "总部模块"))
 
     implementation_type = form.get("实施服务类型")
     implementation_days = int(form.get("实施服务人天", 0) or 0)
     if implementation_type and implementation_days > 0:
         service = lookup_product(product_index, implementation_type, group="实施服务")
-        items.append(build_quote_item(service, implementation_days, discount, "实施服务", "实施服务"))
+        items.append(build_quote_item(service, implementation_days, 1.0, "实施服务", "实施服务"))
+
+    protected_bypass_count = sum(1 for item in items if item.get("protected_item_bypass"))
+    if protected_bypass_count > 0:
+        auto_adjustments.append({
+            "name": "protected_item_bypass",
+            "count": protected_bypass_count,
+        })
+
+    manual_audit = build_manual_override_audit(
+        form=form,
+        recommended_factor=recommended_factor,
+        final_factor=deal_price_factor,
+        bounded_range=bounded_range,
+        factor_source=normalized["factor_source"],
+    )
+    approval = build_approval_decision(
+        route_strategy=route_strategy,
+        base_factor=recommended_factor,
+        final_factor=deal_price_factor,
+        history_sample_count=history_meta["history_sample_count"],
+        manual_override=manual_audit["manual_override"],
+        protected_item_bypass=protected_bypass_count > 0,
+    )
+    legacy_recommendation = legacy_factor(store_count, rules)
 
     config = {
         "客户信息": {
@@ -485,17 +801,45 @@ def build_quotation_config(form, quote_date=None):
         "报价有效期": "30个工作日",
         "门店数量": store_count,
         "报价项目": items,
-        "定价信息": pricing_info,
         "条款": default_terms(),
+        "pricing_info": {
+            "scope_match": route_strategy == "small-segment",
+            "route_strategy": route_strategy,
+            "route_reason": route_reason,
+            "algorithm_version": SMALL_SEGMENT_ALGORITHM_VERSION if route_strategy == "small-segment" else "legacy-v1",
+            "sample_bucket": sample_bucket,
+            "base_factor": round(recommended_factor, 6),
+            "auto_adjustments": auto_adjustments,
+            "bounded_range": bounded_range,
+            "final_factor": round(deal_price_factor, 6),
+            "deal_price_factor_source": normalized["factor_source"],
+            "small_segment_enabled": as_bool(
+                form.get("small_segment_enabled"),
+                default=DEFAULT_SMALL_SEGMENT_ENABLED,
+            ),
+            "protected_item_bypass": protected_bypass_count > 0,
+            "history_sample_count": history_meta["history_sample_count"],
+            "history_weight": history_meta["history_weight"],
+            "history_anchor": history_meta["history_anchor"],
+            "history_window_months": HISTORY_WINDOW_MONTHS,
+            "history_filtered_reason_summary": history_meta["history_filtered_reason_summary"],
+            "legacy_factor": legacy_recommendation,
+            "new_vs_legacy_factor_delta": round(deal_price_factor - legacy_recommendation, 6),
+            "approval_required": approval["approval_required"],
+            "approval_reason": approval["approval_reason"],
+            "manual_override_reason": manual_audit["manual_override_reason"],
+            "manual_override_audit": {
+                "enabled": manual_audit["manual_override"],
+                "before_factor": manual_audit["manual_override_before_factor"],
+                "after_factor": manual_audit["manual_override_after_factor"],
+                "operator": manual_audit["manual_override_operator"],
+                "time": manual_audit["manual_override_time"],
+                "outside_band": manual_audit["manual_override_outside_band"],
+            },
+        },
     }
 
-    tiers = build_tier_config(
-        form.get("是否启用阶梯报价"),
-        rules,
-        package=package,
-        meal_type=meal_type,
-        casebase=history_casebase,
-    )
+    tiers = build_tier_config(form.get("是否启用阶梯报价"), rules)
     if tiers:
         config["阶梯配置"] = tiers
     return config
