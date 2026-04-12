@@ -274,15 +274,7 @@ python3 scripts/check_openclaw_update.py --apply
 
 ## 飞书文件消息下载（推荐）
 
-为了解决"本地路径在飞书不可下载"的问题，主脚本已支持生成后自动上传并发送飞书文件消息。
-
-### 需要的环境变量
-
-- `FEISHU_APP_ID`
-- `FEISHU_APP_SECRET`
-- `FEISHU_RECEIVE_ID`
-- `FEISHU_RECEIVE_ID_TYPE`（可选，默认 `chat_id`）
-- `FEISHU_SEND_FILES`（可选，设为 `1/true` 时自动发送）
+建议OpenClaw在workspace新建files目录来存储生成的文件，并发送文件到飞书聊天消息中。
 
 ### 使用方式
 
