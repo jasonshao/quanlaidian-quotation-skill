@@ -224,12 +224,19 @@ def handle_quote_message(
     form_data = session.get("form_data", {})
 
     prefill = extract_prefill_fields(incoming)
+    applied_prefill = False
     for key, value in prefill.items():
         if key == "门店套餐别名":
             continue
-        if key == "客户品牌名称" and incoming in START_WORDS:
+        if key == "客户品牌名称":
+            if incoming in START_WORDS:
+                continue
+            if form_data.get("客户品牌名称"):
+                continue
+        if key in {"餐饮类型", "门店数量"} and form_data.get(key):
             continue
         form_data[key] = value
+        applied_prefill = True
 
     if prefill.get("门店套餐别名") == "旗舰版" and form_data.get("餐饮类型"):
         form_data["门店套餐"] = get_default_package_value(form_data["餐饮类型"])
@@ -238,7 +245,7 @@ def handle_quote_message(
 
     step = _next_step(form_data)
 
-    if incoming and not prefill:
+    if incoming and not applied_prefill:
         try:
             _apply_step_input(step, incoming, form_data)
         except Exception as exc:
