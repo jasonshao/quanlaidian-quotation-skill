@@ -1,4 +1,4 @@
 interface:
   display_name: "全来店报价单"
-  short_description: "表单生成全来店 PDF、Excel、JSON 报价"
-  default_prompt: "Use $quanlaidian-quotation-skill to generate 全来店报价 files, then show a readable quote preview in chat and provide downloadable links for PDF, Excel, and JSON."
+  short_description: "优先表单，未弹出时走引导式选择对话生成全来店报价"
+  default_prompt: "Use $quanlaidian-quotation-skill to generate 全来店报价. Prefer the native OpenClaw form when it is available. If no form is shown, immediately switch to a low-typing guided chat flow: ask for brand, meal type, store count, default to the matching 旗舰版 when package is not specified, present meal-type-filtered add-on and headquarter module options, and only ask for delivery center count, production center count, or implementation details when those modules are selected. After collecting enough information, generate the files, show a readable quote preview in chat, and provide downloadable links for PDF, Excel, and JSON."
