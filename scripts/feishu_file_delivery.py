@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Feishu file upload + file message delivery utilities."""
+"""Feishu message + file delivery utilities."""
 
 from __future__ import annotations
 
@@ -55,24 +55,28 @@ class FeishuClient:
         self.receive_id_type = receive_id_type
 
     @classmethod
-    def from_env(cls) -> "FeishuClient":
+    def from_env(
+        cls,
+        receive_id: str | None = None,
+        receive_id_type: str | None = None,
+    ) -> "FeishuClient":
         app_id = os.getenv("FEISHU_APP_ID", "").strip()
         app_secret = os.getenv("FEISHU_APP_SECRET", "").strip()
-        receive_id = os.getenv("FEISHU_RECEIVE_ID", "").strip()
-        receive_id_type = os.getenv("FEISHU_RECEIVE_ID_TYPE", "chat_id").strip() or "chat_id"
+        final_receive_id = (receive_id or os.getenv("FEISHU_RECEIVE_ID", "")).strip()
+        final_receive_id_type = receive_id_type or os.getenv("FEISHU_RECEIVE_ID_TYPE", "chat_id").strip() or "chat_id"
 
         missing = [
             name
             for name, value in (
                 ("FEISHU_APP_ID", app_id),
                 ("FEISHU_APP_SECRET", app_secret),
-                ("FEISHU_RECEIVE_ID", receive_id),
+                ("FEISHU_RECEIVE_ID", final_receive_id),
             )
             if not value
         ]
         if missing:
             raise FeishuDeliveryError("飞书发送缺少环境变量: " + ", ".join(missing))
-        return cls(app_id, app_secret, receive_id, receive_id_type)
+        return cls(app_id, app_secret, final_receive_id, final_receive_id_type)
 
     def _request_json(self, url: str, payload: dict, token: str | None = None) -> dict:
         headers = {"Content-Type": "application/json; charset=utf-8"}
@@ -97,6 +101,18 @@ class FeishuClient:
             raise FeishuDeliveryError(f"获取 tenant_access_token 失败: {data}")
         return data["tenant_access_token"]
 
+    def _send_message(self, token: str, msg_type: str, content: dict) -> str:
+        payload = {
+            "receive_id": self.receive_id,
+            "msg_type": msg_type,
+            "content": json.dumps(content, ensure_ascii=False),
+        }
+        url = f"https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type={self.receive_id_type}"
+        data = self._request_json(url, payload, token=token)
+        if data.get("code") != 0:
+            raise FeishuDeliveryError(f"发送{msg_type}消息失败: {data}")
+        return data["data"]["message_id"]
+
     def upload_file(self, token: str, file_path: Path) -> str:
         body, content_type = _build_multipart_form(
             fields={"file_type": "stream", "file_name": file_path.name},
@@ -118,28 +134,13 @@ class FeishuClient:
         return data["data"]["file_key"]
 
     def send_file_message(self, token: str, file_key: str) -> str:
-        payload = {
-            "receive_id": self.receive_id,
-            "msg_type": "file",
-            "content": json.dumps({"file_key": file_key}, ensure_ascii=False),
-        }
-        url = f"https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type={self.receive_id_type}"
-        data = self._request_json(url, payload, token=token)
-        if data.get("code") != 0:
-            raise FeishuDeliveryError(f"发送文件消息失败: {data}")
-        return data["data"]["message_id"]
+        return self._send_message(token, "file", {"file_key": file_key})
 
     def send_text_message(self, token: str, text: str) -> str:
-        payload = {
-            "receive_id": self.receive_id,
-            "msg_type": "text",
-            "content": json.dumps({"text": text}, ensure_ascii=False),
-        }
-        url = f"https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type={self.receive_id_type}"
-        data = self._request_json(url, payload, token=token)
-        if data.get("code") != 0:
-            raise FeishuDeliveryError(f"发送文本消息失败: {data}")
-        return data["data"]["message_id"]
+        return self._send_message(token, "text", {"text": text})
+
+    def send_card_message(self, token: str, card: dict) -> str:
+        return self._send_message(token, "interactive", card)
 
 
 def should_send_to_feishu(explicit_flag: bool = False) -> bool:
@@ -170,3 +171,9 @@ def deliver_files_to_feishu(file_paths: list[Path], preview_text: str | None = N
             }
         )
     return results
+
+
+def deliver_card_to_feishu(card: dict, chat_id: str | None = None, receive_id_type: str = "chat_id") -> str:
+    client = FeishuClient.from_env(receive_id=chat_id, receive_id_type=receive_id_type)
+    token = client.get_tenant_access_token()
+    return client.send_card_message(token, card)
