@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import math
+import statistics
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
@@ -11,12 +13,23 @@ REFERENCES_DIR = ROOT_DIR / "references"
 PRODUCT_CATALOG_PATH = REFERENCES_DIR / "product_catalog.md"
 PRICING_BASELINE_PATH = REFERENCES_DIR / "pricing_baseline_v5.json"
 SMALL_SEGMENT_MAX_STORES = 30
-SMALL_SEGMENT_ALGORITHM_VERSION = "small-segment-v1"
+SMALL_SEGMENT_ALGORITHM_VERSION = "small-segment-v2"
 HISTORY_WINDOW_MONTHS = 12
 SMALL_SEGMENT_START_UNIT_PRICE = {
     "轻餐": 1800,
     "正餐": 3000,
 }
+# 每增加 1 店的成交价系数降幅。
+# 当前值由 1 店/30 店锚点线性拟合得出，累计历史成交样本 ≥ 50 单后应重新回归校准。
+DISCOUNT_SLOPE_PER_STORE = 0.05 / 19
+# 31 店以上延伸推算时的系数下限，防止极端外推
+FACTOR_FLOOR = 0.08
+# 31 店以上仅提供参考报价，需人工确认
+LARGE_SEGMENT_REFERENCE_ONLY_THRESHOLD = 30
+# 动态带宽：至少需要这么多有效样本才启用标准差驱动
+DYNAMIC_BANDWIDTH_MIN_SAMPLES = 10
+DYNAMIC_BANDWIDTH_MIN = 0.01
+DYNAMIC_BANDWIDTH_MAX = 0.05
 
 PROTECTED_PRODUCT_NAMES = {
     "商管接口",
@@ -227,26 +240,27 @@ def _small_segment_bucket(store_count):
 
 
 def recommend_base_deal_price_factor_smooth(store_count, meal_type):
-    # 新起步锚点：
-    # 轻餐 1 店 1800，正餐 1 店 3000
+    # 起步锚点：轻餐 1 店 1800 元，正餐 1 店 3000 元
     start_factor_map = {
         "轻餐": SMALL_SEGMENT_START_UNIT_PRICE["轻餐"] / 7600,
         "正餐": SMALL_SEGMENT_START_UNIT_PRICE["正餐"] / 11120,
     }
     start_factor = start_factor_map[meal_type]
-    # 沿用原有斜率：每跨 19 店总下降 0.05
-    if store_count <= 20:
-        return start_factor - 0.05 * (store_count - 1) / 19
-    if store_count <= 30:
-        step = 0.05 / 19
-        factor_at_20 = start_factor - 0.05
-        return factor_at_20 - step * (store_count - 20)
-    raise ValueError("31店及以上暂不受理，请转人工定价")
+    # 统一线性公式（1-30 店连续，无折点）
+    factor = start_factor - DISCOUNT_SLOPE_PER_STORE * (store_count - 1)
+    # 31 店以上：延伸外推，但加 FACTOR_FLOOR 兜底，避免极端值
+    return max(FACTOR_FLOOR, factor)
 
 
-def small_segment_bounds(store_count, meal_type):
+def small_segment_bounds(store_count, meal_type, sample_factors=None):
     center = recommend_base_deal_price_factor_smooth(store_count, meal_type)
-    bandwidth = 0.02 if meal_type == "轻餐" else 0.015
+    static_bandwidth = 0.02 if meal_type == "轻餐" else 0.015
+    if sample_factors and len(sample_factors) >= DYNAMIC_BANDWIDTH_MIN_SAMPLES:
+        # 用历史成交系数的标准差驱动带宽，减少人工审批频率
+        dynamic_bw = round(1.5 * statistics.stdev(sample_factors), 4)
+        bandwidth = min(DYNAMIC_BANDWIDTH_MAX, max(DYNAMIC_BANDWIDTH_MIN, dynamic_bw))
+    else:
+        bandwidth = static_bandwidth
     low = max(0.01, center - bandwidth)
     high = min(1.0, center + bandwidth)
     return round(low, 6), round(high, 6)
@@ -371,11 +385,10 @@ def summarize_reasons(reason_list):
 
 
 def history_weight_cap(sample_count):
-    if sample_count < 6:
-        return 0.0
-    if sample_count <= 12:
-        return 0.15
-    return 0.25
+    # 平滑指数曲线，避免"5 单 vs 6 单"的阶梯跳变。
+    # 公式：0.25 × (1 − e^(−n/8))，渐近线为 0.25（即最多 25% 历史权重）。
+    # 典型值：1 单≈3%，6 单≈13%，12 单≈22%，20 单≈24%，∞→25%。
+    return round(0.25 * (1 - math.exp(-sample_count / 8)), 6)
 
 
 def apply_history_adjustment(form, meal_type, sample_bucket, base_factor):
@@ -387,6 +400,7 @@ def apply_history_adjustment(form, meal_type, sample_bucket, base_factor):
             "history_weight": 0.0,
             "history_anchor": None,
             "history_filtered_reason_summary": [],
+            "accepted_sample_factors": [],
         }
 
     accepted = []
@@ -400,6 +414,7 @@ def apply_history_adjustment(form, meal_type, sample_bucket, base_factor):
 
     sample_count = len(accepted)
     cap = history_weight_cap(sample_count)
+    factors = [extract_sample_factor(s) for s in accepted]
     if cap == 0.0:
         return {
             "final_factor": round(base_factor, 6),
@@ -407,9 +422,9 @@ def apply_history_adjustment(form, meal_type, sample_bucket, base_factor):
             "history_weight": 0.0,
             "history_anchor": None,
             "history_filtered_reason_summary": summarize_reasons(filtered_reasons),
+            "accepted_sample_factors": factors,
         }
 
-    factors = [extract_sample_factor(s) for s in accepted]
     factors_sorted = sorted(factors)
     lo = percentile(factors_sorted, 0.1)
     hi = percentile(factors_sorted, 0.9)
@@ -425,6 +440,7 @@ def apply_history_adjustment(form, meal_type, sample_bucket, base_factor):
         "history_weight": round(cap, 6),
         "history_anchor": round(anchor, 6),
         "history_filtered_reason_summary": summarize_reasons(filtered_reasons),
+        "accepted_sample_factors": factors,
     }
 
 
@@ -495,8 +511,7 @@ def validate_form(form, product_index):
 
     if int(form["门店数量"]) <= 0:
         raise ValueError("门店数量必须大于 0")
-    if int(form["门店数量"]) > SMALL_SEGMENT_MAX_STORES:
-        raise ValueError("31店及以上暂不受理，请转人工定价")
+    large_segment_reference_only = int(form["门店数量"]) > LARGE_SEGMENT_REFERENCE_ONLY_THRESHOLD
 
     recommended_factor, chosen_factor, factor_source = normalize_deal_price_factor(form)
 
@@ -547,6 +562,7 @@ def validate_form(form, product_index):
         "recommended_factor": recommended_factor,
         "deal_price_factor": chosen_factor,
         "factor_source": factor_source,
+        "large_segment_reference_only": large_segment_reference_only,
     }
 
 
@@ -681,6 +697,7 @@ def build_quotation_config(form, quote_date=None):
             base_factor=deal_price_factor,
         )
         deal_price_factor = history_adjusted["final_factor"]
+        accepted_sample_factors = history_adjusted["accepted_sample_factors"]
         history_meta = {
             "history_sample_count": history_adjusted["history_sample_count"],
             "history_weight": history_adjusted["history_weight"],
@@ -688,6 +705,7 @@ def build_quotation_config(form, quote_date=None):
             "history_filtered_reason_summary": history_adjusted["history_filtered_reason_summary"],
         }
     else:
+        accepted_sample_factors = []
         history_meta = {
             "history_sample_count": 0,
             "history_weight": 0.0,
@@ -703,7 +721,7 @@ def build_quotation_config(form, quote_date=None):
             "anchor": history_meta["history_anchor"],
         })
 
-    lower, upper = small_segment_bounds(store_count, meal_type)
+    lower, upper = small_segment_bounds(store_count, meal_type, accepted_sample_factors)
     pre_bound_factor = deal_price_factor
     deal_price_factor = round(min(upper, max(lower, deal_price_factor)), 6)
     bounded_range = [lower, upper]
@@ -783,6 +801,7 @@ def build_quotation_config(form, quote_date=None):
         "条款": default_terms(),
         "pricing_info": {
             "algorithm_version": SMALL_SEGMENT_ALGORITHM_VERSION,
+            "large_segment_reference_only": normalized["large_segment_reference_only"],
             "sample_bucket": sample_bucket,
             "base_factor": round(recommended_factor, 6),
             "auto_adjustments": auto_adjustments,
