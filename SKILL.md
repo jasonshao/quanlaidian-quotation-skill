@@ -163,7 +163,6 @@ OpenClaw 对话输出：
 必要时读取以下文件：
 
 - `references/product_catalog.md`
-- `references/cost_prices.md`
 - `references/sales_guide.md`
 - `references/openclaw_form_schema.json`
 - `references/openclaw_form_config.json`
