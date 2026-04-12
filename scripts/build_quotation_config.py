@@ -506,7 +506,7 @@ def validate_form(form, product_index):
 
     module_names = form.get("门店增值模块", [])
     for module_name in module_names:
-        module = lookup_product(product_index, module_name, group="门店增值模块")
+        module = lookup_product(product_index, module_name, meal_type=meal_type, group="门店增值模块")
         if module["meal_type"] != meal_type:
             raise ValueError("餐饮类型与门店增值模块不匹配")
 
