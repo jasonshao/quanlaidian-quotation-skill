@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import argparse
 import json
-import re
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
@@ -12,7 +11,6 @@ from scripts.pricing_baseline_codec import load_baseline_from_files
 ROOT_DIR = Path(__file__).resolve().parent.parent
 REFERENCES_DIR = ROOT_DIR / "references"
 PRODUCT_CATALOG_PATH = REFERENCES_DIR / "product_catalog.md"
-DISCOUNT_RULES_PATH = REFERENCES_DIR / "discount_rules.json"
 PRICING_BASELINE_PATH = REFERENCES_DIR / "pricing_baseline_v5.json"
 PRICING_BASELINE_OBF_PATH = REFERENCES_DIR / "pricing_baseline_v5.obf"
 SMALL_SEGMENT_MAX_STORES = 30
@@ -170,11 +168,6 @@ def load_product_catalog(path=PRODUCT_CATALOG_PATH):
     flush_table()
     return products
 
-
-def load_discount_rules(path=DISCOUNT_RULES_PATH):
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
 def load_pricing_baseline(path=PRICING_BASELINE_PATH):
     return load_baseline_from_files(
         json_path=path,
@@ -230,26 +223,6 @@ def resolve_product_pricing(product, quote_meal_type, baseline_index):
 
     standard_price = compute_standard_price_by_group(group, name, cost_price)
     return int(standard_price), float(cost_price), "baseline_v5"
-
-
-def parse_store_scale(scale_text):
-    if scale_text == "300店以上":
-        return 301, None
-    matched = re.match(r"(\d+)-(\d+)店", scale_text)
-    if not matched:
-        raise ValueError(f"无法解析门店规模规则: {scale_text}")
-    return int(matched.group(1)), int(matched.group(2))
-
-
-def recommend_discount(store_count, rules=None):
-    rules = rules or load_discount_rules()
-    for rule in rules["折扣规则"]["按门店规模"]:
-        start, end = parse_store_scale(rule["规模"])
-        if end is None and store_count >= start:
-            return rule["建议折扣"]
-        if start <= store_count <= end:
-            return rule["建议折扣"]
-    return 0
 
 
 def _small_segment_bucket(store_count):
@@ -490,15 +463,13 @@ def _extract_deal_price_factor_input(form):
     return None, None
 
 
-def normalize_deal_price_factor(form, rules, route_strategy):
+def normalize_deal_price_factor(form, route_strategy):
     store_count = int(form["门店数量"])
     meal_type = form["餐饮类型"]
-    legacy_recommended_discount = recommend_discount(store_count, rules=rules)
-    legacy_recommended_factor = 1 - float(legacy_recommended_discount)
+    recommended_factor = recommend_base_deal_price_factor_smooth(store_count, meal_type)
     provided_factor, source = _extract_deal_price_factor_input(form)
 
     if route_strategy == "small-segment":
-        recommended_factor = recommend_base_deal_price_factor_smooth(store_count, meal_type)
         if provided_factor is None:
             rounded_factor = round_factor(recommended_factor)
             return rounded_factor, rounded_factor, "auto"
@@ -510,14 +481,14 @@ def normalize_deal_price_factor(form, rules, route_strategy):
         return round_factor(recommended_factor), round_factor(float(provided_factor)), source
 
     if provided_factor is None:
-        rounded_factor = round_factor(legacy_recommended_factor)
+        rounded_factor = round_factor(recommended_factor)
         return rounded_factor, rounded_factor, "auto-legacy"
     reason = _normalize_manual_reason(form)
     if not reason:
         raise ValueError("人工改价必须填写原因")
     if not 0 < provided_factor <= 1:
         raise ValueError("成交价系数必须在 (0, 1] 区间")
-    return round_factor(legacy_recommended_factor), round_factor(float(provided_factor)), source
+    return round_factor(recommended_factor), round_factor(float(provided_factor)), source
 
 
 def lookup_product(index, name, meal_type=None, group=None):
@@ -556,7 +527,7 @@ def determine_route_strategy(form):
     return "small-segment", "store_count_le_30_standard_scope"
 
 
-def validate_form(form, product_index, rules, route_strategy):
+def validate_form(form, product_index, route_strategy):
     required = ["客户品牌名称", "餐饮类型", "门店数量", "门店套餐"]
     missing = [key for key in required if form.get(key) in (None, "", [])]
     if missing:
@@ -571,7 +542,7 @@ def validate_form(form, product_index, rules, route_strategy):
     if int(form["门店数量"]) > SMALL_SEGMENT_MAX_STORES:
         raise ValueError("31店及以上暂不受理，请转人工定价")
 
-    recommended_factor, chosen_factor, factor_source = normalize_deal_price_factor(form, rules, route_strategy)
+    recommended_factor, chosen_factor, factor_source = normalize_deal_price_factor(form, route_strategy)
 
     package = lookup_product(product_index, form["门店套餐"], group="门店套餐")
     if package["meal_type"] != meal_type:
@@ -641,59 +612,6 @@ def build_quote_item(product, standard_price, quantity, deal_price_factor, categ
     }
 
 
-def build_custom_quote_item(name, unit, standard_price, quantity, module_category="实施服务"):
-    return {
-        "商品分类": "实施服务",
-        "商品名称": name,
-        "单位": unit,
-        "标准价": int(standard_price),
-        "成交价系数": 1.0,
-        "deal_price_factor": 1.0,
-        "折扣": 0.0,
-        "数量": int(quantity),
-        "模块分类": module_category,
-        "protected_item_bypass": False,
-    }
-
-
-def _delivery_center_impl_base_fee(store_count):
-    if store_count <= 10:
-        return 5000
-    if store_count <= 50:
-        return 10000
-    if store_count <= 300:
-        return 20000
-    return 30000
-
-
-def build_supply_chain_implementation_items(form):
-    """
-    总部供应链实施费规则：
-    - 配送中心：首个配送中心按门店规模阶梯计费，同品牌其余配送中心按 50% 计费
-    - 生产加工：10000 元/个
-    - 智能预估：5000 元/个（按是否选择门店增值模块“智能预估”计 1 个）
-    """
-    headquarter_modules = set(form.get("总部模块", []) or [])
-    module_names = set(form.get("门店增值模块", []) or [])
-    store_count = int(form.get("门店数量", 0) or 0)
-    items = []
-
-    delivery_center_count = int(form.get("配送中心数量", 0) or 0) if "配送中心" in headquarter_modules else 0
-    if delivery_center_count > 0:
-        base_fee = _delivery_center_impl_base_fee(store_count)
-        total_fee = base_fee + int(round(base_fee * 0.5)) * max(0, delivery_center_count - 1)
-        items.append(build_custom_quote_item("供应链实施费（配送中心）", "项", total_fee, 1))
-
-    production_center_count = int(form.get("生产加工中心数量", 0) or 0) if "生产加工" in headquarter_modules else 0
-    if production_center_count > 0:
-        items.append(build_custom_quote_item("供应链实施费（生产加工）", "个", 10000, production_center_count))
-
-    if "智能预估" in module_names:
-        items.append(build_custom_quote_item("供应链实施费（智能预估）", "个", 5000, 1))
-
-    return items
-
-
 def default_terms():
     return [
         "以上报价金额均为含税金额，税率为6%",
@@ -704,26 +622,24 @@ def default_terms():
     ]
 
 
-def build_tier_config(enabled, rules):
+def build_tier_config(enabled, meal_type):
     if not enabled:
         return []
     candidates = [10, 20, 30]
     tiers = []
     for count in candidates:
-        discount = recommend_discount(count, rules=rules)
-        factor = round_factor(1 - float(discount))
+        factor = round_factor(recommend_base_deal_price_factor_smooth(count, meal_type))
         tiers.append({
             "标签": f"{count}店方案",
             "门店数": count,
             "成交价系数": factor,
             "deal_price_factor": factor,
-            "折扣": discount,
         })
     return tiers
 
 
-def legacy_factor(store_count, rules):
-    return round_factor(1 - float(recommend_discount(store_count, rules=rules)))
+def legacy_factor(store_count, meal_type):
+    return round_factor(recommend_base_deal_price_factor_smooth(store_count, meal_type))
 
 
 def build_manual_override_audit(form, recommended_factor, final_factor, bounded_range, factor_source):
@@ -798,11 +714,10 @@ def build_quotation_config(form, quote_date=None):
     baseline = load_pricing_baseline()
     baseline_index = build_pricing_baseline_index(baseline)
     product_index = build_product_index(products)
-    rules = load_discount_rules()
     meal_type = form["餐饮类型"]
     store_count = int(form["门店数量"])
     route_strategy, route_reason = determine_route_strategy(form)
-    normalized = validate_form(form, product_index, rules, route_strategy)
+    normalized = validate_form(form, product_index, route_strategy)
     deal_price_factor = normalized["deal_price_factor"]
     recommended_factor = normalized["recommended_factor"]
     sample_bucket = _small_segment_bucket(store_count) if route_strategy == "small-segment" else None
@@ -887,8 +802,6 @@ def build_quotation_config(form, quote_date=None):
         standard_price, _, _ = resolve_product_pricing(module, meal_type, baseline_index)
         items.append(build_quote_item(module, standard_price, quantity, deal_price_factor, category, "总部模块"))
 
-    items.extend(build_supply_chain_implementation_items(form))
-
     implementation_type = form.get("实施服务类型")
     implementation_days = int(form.get("实施服务人天", 0) or 0)
     if implementation_type and implementation_days > 0:
@@ -918,7 +831,7 @@ def build_quotation_config(form, quote_date=None):
         manual_override=manual_audit["manual_override"],
         protected_item_bypass=protected_bypass_count > 0,
     )
-    legacy_recommendation = legacy_factor(store_count, rules)
+    legacy_recommendation = legacy_factor(store_count, meal_type)
 
     config = {
         "客户信息": {
@@ -967,7 +880,7 @@ def build_quotation_config(form, quote_date=None):
         },
     }
 
-    tiers = build_tier_config(form.get("是否启用阶梯报价"), rules)
+    tiers = build_tier_config(form.get("是否启用阶梯报价"), meal_type)
     if tiers:
         config["阶梯配置"] = tiers
     return config
