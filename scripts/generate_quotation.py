@@ -240,6 +240,56 @@ def calc_actual_price(std_price, deal_price_factor):
     return raw.quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)
 
 
+def _money_decimal(value, default='0.00'):
+    if value in (None, '', '赠送'):
+        return Decimal(str(default))
+    return Decimal(str(value)).quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)
+
+
+def get_item_unit_price(item):
+    if item.get('商品单价') not in (None, '', '赠送'):
+        return _money_decimal(item.get('商品单价'))
+    std_price = item.get('标准价', 0)
+    if std_price in ('赠送', None):
+        return '赠送'
+    return calc_actual_price(std_price, get_deal_price_factor(item))
+
+
+def get_item_subtotal(item):
+    if item.get('报价小计') not in (None, '', '赠送'):
+        return _money_decimal(item.get('报价小计'))
+    unit_price = get_item_unit_price(item)
+    if unit_price == '赠送':
+        return '赠送'
+    qty = Decimal(str(item.get('数量', 1)))
+    return (unit_price * qty).quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)
+
+
+def get_item_cost_unit_price(item):
+    if item.get('成本单价') not in (None, '', '赠送'):
+        return _money_decimal(item.get('成本单价'))
+    return None
+
+
+def get_item_cost_subtotal(item):
+    if item.get('成本小计') not in (None, '', '赠送'):
+        return _money_decimal(item.get('成本小计'))
+    cost_unit_price = get_item_cost_unit_price(item)
+    if cost_unit_price is None:
+        return None
+    qty = Decimal(str(item.get('数量', 1)))
+    return (cost_unit_price * qty).quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)
+
+
+def get_tier_unit_price(item, tier_factor):
+    if item.get('模块分类') == '门店软件套餐':
+        std_price = item.get('标准价', 0)
+        if std_price in ('赠送', None):
+            return '赠送'
+        return calc_actual_price(std_price, tier_factor)
+    return get_item_unit_price(item)
+
+
 def _normalize_profit_group(module_category):
     mapping = {
         '门店软件套餐': '门店套餐',
@@ -404,16 +454,14 @@ def build_standard_template(data, styles):
     items = data.get('报价项目', [])
 
     # 表头
-    col_widths = [10*mm, 28*mm, 38*mm, 16*mm, 20*mm, 14*mm, 16*mm, 20*mm, 22*mm]
+    col_widths = [10*mm, 30*mm, 46*mm, 18*mm, 16*mm, 24*mm, 26*mm]
     header = [
         Paragraph(_mixed_text('序号'), styles['CellStyleCenter']),
         Paragraph(_mixed_text('商品分类'), styles['CellStyleCenter']),
         Paragraph(_mixed_text('商品名称'), styles['CellStyleCenter']),
         Paragraph(_mixed_text('单位'), styles['CellStyleCenter']),
-        Paragraph(_mixed_text('标准价'), styles['CellStyleCenter']),
-        Paragraph(_mixed_text('成交价系数'), styles['CellStyleCenter']),
         Paragraph(_mixed_text('数量'), styles['CellStyleCenter']),
-        Paragraph(_mixed_text('实际价'), styles['CellStyleCenter']),
+        Paragraph(_mixed_text('商品单价'), styles['CellStyleCenter']),
         Paragraph(_mixed_text('小计'), styles['CellStyleCenter']),
     ]
 
@@ -421,19 +469,15 @@ def build_standard_template(data, styles):
     total = Decimal('0')
 
     for idx, item in enumerate(items, 1):
-        std_price = item.get('标准价', 0)
-        deal_price_factor = get_deal_price_factor(item)
         qty = item.get('数量', 1)
+        unit_price_d = get_item_unit_price(item)
+        subtotal_d = get_item_subtotal(item)
 
-        if std_price == '赠送' or std_price is None:
-            actual_price = '赠送'
+        if unit_price_d == '赠送' or subtotal_d == '赠送':
+            unit_price = '赠送'
             subtotal = '赠送'
         else:
-            std_price_d = Decimal(str(std_price))
-            qty_d = Decimal(str(qty))
-            actual_price_d = calc_actual_price(std_price_d, deal_price_factor)
-            subtotal_d = (actual_price_d * qty_d).quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)
-            actual_price = float(actual_price_d)
+            unit_price = float(unit_price_d)
             subtotal = float(subtotal_d)
             total += subtotal_d
 
@@ -442,10 +486,8 @@ def build_standard_template(data, styles):
             Paragraph(_mixed_text(item.get('商品分类', '')), styles['CellStyle']),
             Paragraph(_mixed_text(item.get('商品名称', '')), styles['CellStyle']),
             Paragraph(_mixed_text(item.get('单位', '')), styles['CellStyleCenter']),
-            Paragraph(_mixed_text(fmt_money(std_price)), styles['CellStyleRight']),
-            Paragraph(_mixed_text(fmt_pct(deal_price_factor)), styles['CellStyleCenter']),
             Paragraph(_mixed_text(qty), styles['CellStyleCenter']),
-            Paragraph(_mixed_text(fmt_money(actual_price)), styles['CellStyleRight']),
+            Paragraph(_mixed_text(fmt_money(unit_price)), styles['CellStyleRight']),
             Paragraph(_mixed_text(fmt_money(subtotal)), styles['CellStyleRight']),
         ]
         table_data.append(row)
@@ -457,10 +499,7 @@ def build_standard_template(data, styles):
         Paragraph(_mixed_text(''), styles['CellStyle']),
         Paragraph(_mixed_text(''), styles['CellStyle']),
         Paragraph(_mixed_text(''), styles['CellStyle']),
-        Paragraph(_mixed_text(''), styles['CellStyle']),
-        Paragraph(_mixed_text(''), styles['CellStyle']),
         Paragraph(_mixed_text('合计'), styles['CellStyleCenter']),
-        Paragraph(_mixed_text(''), styles['CellStyle']),
         Paragraph(_mixed_text(fmt_money(total_float)), styles['CellStyleRight']),
     ]
     table_data.append(total_row)
@@ -484,7 +523,7 @@ def build_standard_template(data, styles):
         ('GRID', (0,0), (-1,-1), 0.5, BORDER_COLOR),
         # 合计行样式
         ('BACKGROUND', (0,-1), (-1,-1), TOTAL_BG),
-        ('SPAN', (0,-1), (5,-1)),
+        ('SPAN', (0,-1), (4,-1)),
     ]
 
     # 交替行颜色
@@ -552,24 +591,18 @@ def _build_tiered_section(data, styles):
     ))
     story.append(Spacer(1, 3*mm))
 
-    # 列宽：商品名称42 | 单位12 | 标准价20 | 各tier平分剩余
-    remaining = 180 - 42 - 12 - 20
+    # 列宽：商品名称52 | 单位14 | 各 tier 平分剩余
+    remaining = 180 - 52 - 14
     tier_col_w = remaining * mm / n_tiers
-    col_widths = [42*mm, 12*mm, 20*mm] + [tier_col_w] * n_tiers
+    col_widths = [52*mm, 14*mm] + [tier_col_w] * n_tiers
 
     # 表头行
     def tier_label(t):
-        d = get_deal_price_factor(t)
-        if d == 1:
-            return f"{t['标签']}\n（标准价）"
-        zhe = round(d * 10, 1)
-        zhe_str = f"{int(zhe)}折" if zhe == int(zhe) else f"{zhe}折"
-        return f"{t['标签']}\n（{zhe_str}）"
+        return t['标签']
 
     header = [
         Paragraph(_mixed_text('商品名称'), styles['CellStyleCenter']),
         Paragraph(_mixed_text('单位'), styles['CellStyleCenter']),
-        Paragraph(_mixed_text('标准价'), styles['CellStyleCenter']),
     ] + [Paragraph(_mixed_text(tier_label(t)), styles['CellStyleCenter']) for t in tiers]
 
     table_data = [header]
@@ -601,35 +634,32 @@ def _build_tiered_section(data, styles):
         cat_row_idx = len(table_data)
         cat_header_rows.append(cat_row_idx)
         cat_row = [Paragraph(_mixed_text(cat_name), styles['CNBold'])] + \
-                  [Paragraph('', styles['CellStyle'])] * (2 + n_tiers)
+                  [Paragraph('', styles['CellStyle'])] * (1 + n_tiers)
         table_data.append(cat_row)
 
         cat_tier_totals = [Decimal('0')] * n_tiers
         apply_tier_discount = cat_name not in NO_TIER_DISCOUNT_CATS
 
         for item in cat_items:
-            std_price = item.get('标准价', 0)
             unit = item.get('单位', '')
             item_qty = item.get('数量', 1)
             is_per_store = '店' in unit
+            unit_price = get_item_unit_price(item)
 
-            if std_price == '赠送' or std_price is None:
+            if unit_price == '赠送':
                 row = [
                     Paragraph(_mixed_text(item.get('商品名称', '')), styles['CellStyle']),
                     Paragraph(_mixed_text(unit), styles['CellStyleCenter']),
-                    Paragraph(_mixed_text('赠送'), styles['CellStyleCenter']),
                 ] + [Paragraph(_mixed_text('赠送'), styles['CellStyleCenter']) for _ in tiers]
             else:
-                std_d = Decimal(str(std_price))
                 row = [
                     Paragraph(_mixed_text(item.get('商品名称', '')), styles['CellStyle']),
                     Paragraph(_mixed_text(unit), styles['CellStyleCenter']),
-                    Paragraph(_mixed_text(fmt_money(float(std_d))), styles['CellStyleRight']),
                 ]
                 for ti, t in enumerate(tiers):
                     d = Decimal(str(get_deal_price_factor(t))) if apply_tier_discount else Decimal('1')
                     qty = Decimal(str(t['门店数'])) if is_per_store else Decimal(str(item_qty))
-                    actual = calc_actual_price(std_d, d)
+                    actual = get_tier_unit_price(item, d) if apply_tier_discount else unit_price
                     subtotal = (actual * qty).quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)
                     cat_tier_totals[ti] += subtotal
                     row.append(Paragraph(_mixed_text(fmt_money(float(subtotal))), styles['CellStyleRight']))
@@ -639,7 +669,6 @@ def _build_tiered_section(data, styles):
         sub_row_idx = len(table_data)
         subtotal_rows.append(sub_row_idx)
         sub_row = [
-            Paragraph('', styles['CellStyle']),
             Paragraph('', styles['CellStyle']),
             Paragraph(_mixed_text('小计'), styles['CellStyleCenter']),
         ]
@@ -651,7 +680,6 @@ def _build_tiered_section(data, styles):
     # 合计行
     total_row = [
         Paragraph('', styles['CellStyle']),
-        Paragraph('', styles['CellStyle']),
         Paragraph(_mixed_text('合计'), styles['CNBold']),
     ] + [Paragraph(_mixed_text(f'¥ {fmt_money(float(tot))}'), styles['CellStyleRight'])
          for tot in tier_grand_totals]
@@ -660,7 +688,6 @@ def _build_tiered_section(data, styles):
     # 折算单店年费行
     unit_row = [
         Paragraph(_mixed_text('折算单店年费'), styles['CellStyle']),
-        Paragraph('', styles['CellStyle']),
         Paragraph('', styles['CellStyle']),
     ]
     for ti, t in enumerate(tiers):
@@ -777,16 +804,14 @@ def build_custom_template(data, styles):
         story.append(Paragraph(_mixed_text(cat_name), styles['CNSection']))
         story.append(Spacer(1, 3*mm))
 
-        col_widths = [10*mm, 28*mm, 40*mm, 16*mm, 20*mm, 14*mm, 16*mm, 20*mm, 22*mm]
+        col_widths = [10*mm, 30*mm, 48*mm, 18*mm, 16*mm, 24*mm, 26*mm]
         header = [
             Paragraph(_mixed_text('序号'), styles['CellStyleCenter']),
             Paragraph(_mixed_text('商品分类'), styles['CellStyleCenter']),
             Paragraph(_mixed_text('商品名称'), styles['CellStyleCenter']),
             Paragraph(_mixed_text('单位'), styles['CellStyleCenter']),
-            Paragraph(_mixed_text('标准价'), styles['CellStyleCenter']),
-            Paragraph(_mixed_text('成交价系数'), styles['CellStyleCenter']),
             Paragraph(_mixed_text('数量'), styles['CellStyleCenter']),
-            Paragraph(_mixed_text('实际价'), styles['CellStyleCenter']),
+            Paragraph(_mixed_text('商品单价'), styles['CellStyleCenter']),
             Paragraph(_mixed_text('小计'), styles['CellStyleCenter']),
         ]
 
@@ -794,19 +819,15 @@ def build_custom_template(data, styles):
         cat_total = Decimal('0')
 
         for idx, item in enumerate(cat_items, 1):
-            std_price = item.get('标准价', 0)
-            deal_price_factor = get_deal_price_factor(item)
             qty = item.get('数量', 1)
+            unit_price_d = get_item_unit_price(item)
+            subtotal_d = get_item_subtotal(item)
 
-            if std_price == '赠送' or std_price is None:
-                actual_price = '赠送'
+            if unit_price_d == '赠送' or subtotal_d == '赠送':
+                unit_price = '赠送'
                 subtotal = '赠送'
             else:
-                std_price_d = Decimal(str(std_price))
-                qty_d = Decimal(str(qty))
-                actual_price_d = calc_actual_price(std_price_d, deal_price_factor)
-                subtotal_d = (actual_price_d * qty_d).quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)
-                actual_price = float(actual_price_d)
+                unit_price = float(unit_price_d)
                 subtotal = float(subtotal_d)
                 cat_total += subtotal_d
 
@@ -815,10 +836,8 @@ def build_custom_template(data, styles):
                 Paragraph(_mixed_text(item.get('商品分类', '')), styles['CellStyle']),
                 Paragraph(_mixed_text(item.get('商品名称', '')), styles['CellStyle']),
                 Paragraph(_mixed_text(item.get('单位', '')), styles['CellStyleCenter']),
-                Paragraph(_mixed_text(fmt_money(std_price)), styles['CellStyleRight']),
-                Paragraph(_mixed_text(fmt_pct(deal_price_factor)), styles['CellStyleCenter']),
                 Paragraph(_mixed_text(qty), styles['CellStyleCenter']),
-                Paragraph(_mixed_text(fmt_money(actual_price)), styles['CellStyleRight']),
+                Paragraph(_mixed_text(fmt_money(unit_price)), styles['CellStyleRight']),
                 Paragraph(_mixed_text(fmt_money(subtotal)), styles['CellStyleRight']),
             ]
             table_data.append(row)
@@ -832,10 +851,7 @@ def build_custom_template(data, styles):
             Paragraph(_mixed_text(''), styles['CellStyle']),
             Paragraph(_mixed_text(''), styles['CellStyle']),
             Paragraph(_mixed_text(''), styles['CellStyle']),
-            Paragraph(_mixed_text(''), styles['CellStyle']),
-            Paragraph(_mixed_text(''), styles['CellStyle']),
             Paragraph(_mixed_text('小计'), styles['CellStyleCenter']),
-            Paragraph(_mixed_text(''), styles['CellStyle']),
             Paragraph(_mixed_text(fmt_money(cat_total_float)), styles['CellStyleRight']),
         ]
         table_data.append(subtotal_row)
@@ -853,7 +869,7 @@ def build_custom_template(data, styles):
             ('RIGHTPADDING', (0,0), (-1,-1), 3),
             ('GRID', (0,0), (-1,-1), 0.5, BORDER_COLOR),
             ('BACKGROUND', (0,-1), (-1,-1), TOTAL_BG),
-            ('SPAN', (0,-1), (5,-1)),
+            ('SPAN', (0,-1), (4,-1)),
         ]
         for i in range(1, len(table_data) - 1):
             if i % 2 == 0:
@@ -981,8 +997,7 @@ def _xl_apply_border(ws, min_row, min_col, max_row, max_col):
 def _xl_write_item_table(ws, items, start_row, sheet_name='', compute_values=False):
     """
     向 worksheet 写入报价明细表。
-    列：A=序号, B=商品分类, C=商品名称, D=单位, E=标准价,
-        F=成交价系数, G=数量, H=实际价, I=小计
+    列：A=序号, B=商品分类, C=商品名称, D=单位, E=数量, F=商品单价, G=小计
     compute_values=True 时直接写计算后的数值（兼容性更好），
     否则写 Excel 公式（便于手动调整）。
     返回: (最后数据行号, 合计行号)
@@ -990,7 +1005,7 @@ def _xl_write_item_table(ws, items, start_row, sheet_name='', compute_values=Fal
     from openpyxl.styles import Font, PatternFill, Alignment
 
     # 表头
-    headers = ['序号', '商品分类', '商品名称', '单位', '标准价', '成交价系数', '数量', '实际价', '小计']
+    headers = ['序号', '商品分类', '商品名称', '单位', '数量', '商品单价', '小计']
     for col_idx, h in enumerate(headers, 1):
         cell = ws.cell(row=start_row, column=col_idx, value=h)
         _xl_header_style(cell)
@@ -1000,10 +1015,10 @@ def _xl_write_item_table(ws, items, start_row, sheet_name='', compute_values=Fal
     current_row = data_start
 
     for idx, item in enumerate(items, 1):
-        std_price = item.get('标准价', 0)
-        deal_price_factor = get_deal_price_factor(item)
         qty = item.get('数量', 1)
-        is_gift = (std_price == '赠送' or std_price is None)
+        unit_price_d = get_item_unit_price(item)
+        subtotal_d = get_item_subtotal(item)
+        is_gift = (unit_price_d == '赠送' or subtotal_d == '赠送')
 
         # 交替行背景
         bg = 'F5F7FA' if idx % 2 == 0 else None
@@ -1024,51 +1039,24 @@ def _xl_write_item_table(ws, items, start_row, sheet_name='', compute_values=Fal
         c = ws.cell(row=current_row, column=4, value=item.get('单位', ''))
         _xl_data_style(c, align='center', bg=bg)
 
-        # E: 标准价
-        if is_gift:
-            c = ws.cell(row=current_row, column=5, value='赠送')
-            _xl_data_style(c, align='center', bg=bg)
-        else:
-            c = ws.cell(row=current_row, column=5, value=float(std_price))
-            _xl_data_style(c, align='right', bg=bg, num_format='#,##0.00')
-
-        # F: 成交价系数（存为小数，格式化为百分比）
-        if is_gift:
-            c = ws.cell(row=current_row, column=6, value='-')
-            _xl_data_style(c, align='center', bg=bg)
-        else:
-            c = ws.cell(row=current_row, column=6, value=float(deal_price_factor))
-            _xl_data_style(c, align='center', bg=bg, num_format='0.00%')
-
-        # G: 数量
-        c = ws.cell(row=current_row, column=7, value=int(qty))
+        # E: 数量
+        c = ws.cell(row=current_row, column=5, value=int(qty))
         _xl_data_style(c, align='center', bg=bg)
 
-        # H: 实际价
+        # F: 商品单价
         if is_gift:
-            c = ws.cell(row=current_row, column=8, value='赠送')
+            c = ws.cell(row=current_row, column=6, value='赠送')
             _xl_data_style(c, align='center', bg=bg)
-        elif compute_values:
-            actual = float(std_price) * float(deal_price_factor)
-            c = ws.cell(row=current_row, column=8, value=round(actual, 2))
-            _xl_data_style(c, align='right', bg=bg, num_format='#,##0.00')
         else:
-            c = ws.cell(row=current_row, column=8,
-                        value=f'=E{current_row}*F{current_row}')
+            c = ws.cell(row=current_row, column=6, value=float(unit_price_d))
             _xl_data_style(c, align='right', bg=bg, num_format='#,##0.00')
 
-        # I: 小计
+        # G: 小计
         if is_gift:
-            c = ws.cell(row=current_row, column=9, value='赠送')
+            c = ws.cell(row=current_row, column=7, value='赠送')
             _xl_data_style(c, align='center', bg=bg)
-        elif compute_values:
-            actual = float(std_price) * float(deal_price_factor)
-            subtotal = round(actual * int(qty), 2)
-            c = ws.cell(row=current_row, column=9, value=subtotal)
-            _xl_data_style(c, align='right', bg=bg, num_format='#,##0.00')
         else:
-            c = ws.cell(row=current_row, column=9,
-                        value=f'=H{current_row}*G{current_row}')
+            c = ws.cell(row=current_row, column=7, value=float(subtotal_d))
             _xl_data_style(c, align='right', bg=bg, num_format='#,##0.00')
 
         ws.row_dimensions[current_row].height = 18
@@ -1079,26 +1067,23 @@ def _xl_write_item_table(ws, items, start_row, sheet_name='', compute_values=Fal
     # 合计行
     total_row = current_row
     ws.merge_cells(start_row=total_row, start_column=1,
-                   end_row=total_row, end_column=6)
+                   end_row=total_row, end_column=5)
     c = ws.cell(row=total_row, column=1, value='合计')
     _xl_total_style(c, align='center')
 
-    ws.cell(row=total_row, column=7, value='')
-    _xl_total_style(ws.cell(row=total_row, column=7))
-
-    ws.cell(row=total_row, column=8, value='')
-    _xl_total_style(ws.cell(row=total_row, column=8))
+    ws.cell(row=total_row, column=6, value='')
+    _xl_total_style(ws.cell(row=total_row, column=6))
 
     # 合计公式：SUM忽略文本（赠送）
-    c = ws.cell(row=total_row, column=9,
-                value=f'=SUM(I{data_start}:I{last_data_row})')
+    c = ws.cell(row=total_row, column=7,
+                value=f'=SUM(G{data_start}:G{last_data_row})')
     _xl_total_style(c, align='right')
     c.number_format = '#,##0.00'
 
     ws.row_dimensions[total_row].height = 20
 
     # 应用边框（含表头）
-    _xl_apply_border(ws, start_row, 1, total_row, 9)
+    _xl_apply_border(ws, start_row, 1, total_row, 7)
 
     return last_data_row, total_row
 
@@ -1108,13 +1093,11 @@ def _xl_set_col_widths(ws):
     widths = {
         'A': 7,   # 序号
         'B': 16,  # 商品分类
-        'C': 24,  # 商品名称
+        'C': 28,  # 商品名称
         'D': 10,  # 单位
-        'E': 14,  # 标准价
-        'F': 9,   # 成交价系数
-        'G': 8,   # 数量
-        'H': 14,  # 实际价
-        'I': 16,  # 小计
+        'E': 8,   # 数量
+        'F': 14,  # 商品单价
+        'G': 16,  # 小计
     }
     for col, width in widths.items():
         ws.column_dimensions[col].width = width
@@ -1136,12 +1119,12 @@ def generate_xlsx_standard(data, output_path):
     _xl_set_col_widths(ws)
 
     # ── 标题区（行1-2） ──
-    ws.merge_cells('A1:I1')
+    ws.merge_cells('A1:G1')
     c = ws.cell(row=1, column=1, value='"全来店"产品报价单')
     _xl_title_style(c, size=16)
     ws.row_dimensions[1].height = 36
 
-    ws.merge_cells('A2:I2')
+    ws.merge_cells('A2:G2')
     c = ws.cell(row=2, column=1, value='上海收钱吧互联网科技股份有限公司')
     _xl_subtitle_style(c)
     ws.row_dimensions[2].height = 24
@@ -1165,13 +1148,13 @@ def generate_xlsx_standard(data, output_path):
     for i, (left, right) in enumerate(info_rows):
         row_num = 4 + i
         ws.merge_cells(start_row=row_num, start_column=1,
-                       end_row=row_num, end_column=5)
+                       end_row=row_num, end_column=4)
         c = ws.cell(row=row_num, column=1, value=left)
         _xl_info_value_style(c)
 
-        ws.merge_cells(start_row=row_num, start_column=6,
-                       end_row=row_num, end_column=9)
-        c = ws.cell(row=row_num, column=6, value=right)
+        ws.merge_cells(start_row=row_num, start_column=5,
+                       end_row=row_num, end_column=7)
+        c = ws.cell(row=row_num, column=5, value=right)
         _xl_info_value_style(c)
         ws.row_dimensions[row_num].height = 18
 
@@ -1185,18 +1168,15 @@ def generate_xlsx_standard(data, output_path):
 
     # ── 金额大写（合计行下方） ──
     notes_row = total_row + 2
-    total_cell_ref = f'I{total_row}'
+    total_cell_ref = f'G{total_row}'
     ws.merge_cells(start_row=notes_row, start_column=1,
-                   end_row=notes_row, end_column=9)
+                   end_row=notes_row, end_column=7)
     # 大写金额用Python计算（Excel没有内置大写金额函数）
     total_val = Decimal('0')
     for item in items:
-        sp = item.get('标准价', 0)
-        deal_price_factor = get_deal_price_factor(item)
-        qty = item.get('数量', 1)
-        if sp != '赠送' and sp is not None:
-            ap = calc_actual_price(sp, deal_price_factor)
-            total_val += ap * Decimal(str(qty))
+        subtotal = get_item_subtotal(item)
+        if subtotal != '赠送':
+            total_val += subtotal
 
     chinese_amt = number_to_chinese(float(total_val))
     c = ws.cell(row=notes_row, column=1,
@@ -1217,7 +1197,7 @@ def generate_xlsx_standard(data, output_path):
 
     terms_start = notes_row + 1
     ws.merge_cells(start_row=terms_start, start_column=1,
-                   end_row=terms_start, end_column=9)
+                   end_row=terms_start, end_column=7)
     c = ws.cell(row=terms_start, column=1, value='备注：')
     c.font = Font(name='微软雅黑', size=10, bold=True, color='CC8800')
     c.alignment = Alignment(horizontal='left', vertical='center')
@@ -1226,7 +1206,7 @@ def generate_xlsx_standard(data, output_path):
     cn_nums = '①②③④⑤⑥⑦⑧⑨⑩'
     for i, term in enumerate(terms):
         r = terms_start + 1 + i
-        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=9)
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=7)
         prefix = cn_nums[i] if i < 10 else f'{i+1}.'
         c = ws.cell(row=r, column=1, value=f'{prefix} {term}')
         c.font = Font(name='微软雅黑', size=9, color='555555')
@@ -1236,7 +1216,7 @@ def generate_xlsx_standard(data, output_path):
     # ── 页脚 ──
     footer_row = terms_start + 1 + len(terms) + 1
     ws.merge_cells(start_row=footer_row, start_column=1,
-                   end_row=footer_row, end_column=9)
+                   end_row=footer_row, end_column=7)
     c = ws.cell(row=footer_row, column=1,
                 value='上海收钱吧互联网科技股份有限公司  |  地址：上海市闵行区浦江智慧广场陈行公路2168号7号楼')
     c.font = Font(name='微软雅黑', size=8, color='888888')
@@ -1326,18 +1306,24 @@ def generate_xlsx_custom(data, output_path):
 
     # ── 各分类 Sheet ──
     # 门店软件套餐 + 门店增值模块 合并为一个 Sheet；硬件设备不纳入报价
-    # 定价规则：软件/总部 → qty=1, 成交价系数80%；实施服务 → qty=1, 标准价
+    # 定价规则：门店套餐按刊例价系数展示；其他模块保持固定商品单价，仅调整展示数量
 
     def _override_items(src_items, deal_price_factor, qty=1):
-        """返回 qty/成交价系数 覆盖后的副本（刊例价展示用）"""
+        """返回 qty/商品单价 覆盖后的副本（刊例价展示用）"""
         result = []
         for it in src_items:
             ni = dict(it)
             ni['数量'] = qty
             if ni.get('标准价') not in ('赠送', None):
-                ni['deal_price_factor'] = deal_price_factor
-                ni['成交价系数'] = deal_price_factor
-                ni['折扣'] = round(1 - deal_price_factor, 6)
+                if ni.get('模块分类') == '门店软件套餐':
+                    unit_price = calc_actual_price(ni.get('标准价'), deal_price_factor)
+                    ni['deal_price_factor'] = deal_price_factor
+                    ni['成交价系数'] = deal_price_factor
+                    ni['折扣'] = round(1 - deal_price_factor, 6)
+                    ni['商品单价'] = float(unit_price)
+                subtotal = get_item_unit_price(ni)
+                if subtotal != '赠送':
+                    ni['报价小计'] = float((subtotal * Decimal(str(qty))).quantize(Decimal('0.00'), rounding=ROUND_HALF_UP))
             result.append(ni)
         return result
 
@@ -1351,7 +1337,7 @@ def generate_xlsx_custom(data, output_path):
         ws_merged.sheet_view.showGridLines = False
         _xl_set_col_widths(ws_merged)
 
-        ws_merged.merge_cells('A1:I1')
+        ws_merged.merge_cells('A1:G1')
         c = ws_merged.cell(row=1, column=1, value='门店软件与增值模块')
         _xl_title_style(c, size=14)
         ws_merged.row_dimensions[1].height = 30
@@ -1364,7 +1350,7 @@ def generate_xlsx_custom(data, output_path):
                 continue
             # 分区标题行
             ws_merged.merge_cells(start_row=section_row, start_column=1,
-                                  end_row=section_row, end_column=9)
+                                  end_row=section_row, end_column=7)
             c = ws_merged.cell(row=section_row, column=1, value=cat_name)
             c.font = Font(name='微软雅黑', bold=True, size=10, color='CC8800')
             c.fill = PatternFill('solid', fgColor='FFFBF0')
@@ -1374,7 +1360,7 @@ def generate_xlsx_custom(data, output_path):
 
             display_items = _override_items(cat_items, deal_price_factor=0.8, qty=1)
             _, total_row = _xl_write_item_table(ws_merged, display_items, section_row, compute_values=True)
-            cat_totals[cat_name] = (f'I{total_row}', ws_merged.title)
+            cat_totals[cat_name] = (f'G{total_row}', ws_merged.title)
             section_row = total_row + 2
 
         ws_merged.freeze_panes = 'A4'
@@ -1384,7 +1370,7 @@ def generate_xlsx_custom(data, output_path):
         ws = wb.create_sheet('总部模块')
         ws.sheet_view.showGridLines = False
         _xl_set_col_widths(ws)
-        ws.merge_cells('A1:I1')
+        ws.merge_cells('A1:G1')
         c = ws.cell(row=1, column=1, value='总部模块')
         _xl_title_style(c, size=14)
         ws.row_dimensions[1].height = 30
@@ -1392,14 +1378,14 @@ def generate_xlsx_custom(data, output_path):
         display_items = _override_items(categories['总部模块'], deal_price_factor=0.8, qty=1)
         _, total_row = _xl_write_item_table(ws, display_items, 3, compute_values=True)
         ws.freeze_panes = 'A4'
-        cat_totals['总部模块'] = (f'I{total_row}', ws.title)
+        cat_totals['总部模块'] = (f'G{total_row}', ws.title)
 
     # ── 实施服务 Sheet（qty=1, 标准价）──
     if categories.get('实施服务'):
         ws = wb.create_sheet('实施服务')
         ws.sheet_view.showGridLines = False
         _xl_set_col_widths(ws)
-        ws.merge_cells('A1:I1')
+        ws.merge_cells('A1:G1')
         c = ws.cell(row=1, column=1, value='实施服务')
         _xl_title_style(c, size=14)
         ws.row_dimensions[1].height = 30
@@ -1407,7 +1393,7 @@ def generate_xlsx_custom(data, output_path):
         display_items = _override_items(categories['实施服务'], deal_price_factor=1.0, qty=1)
         _, total_row = _xl_write_item_table(ws, display_items, 3, compute_values=True)
         ws.freeze_panes = 'A4'
-        cat_totals['实施服务'] = (f'I{total_row}', ws.title)
+        cat_totals['实施服务'] = (f'G{total_row}', ws.title)
 
     # ── 封面追加：条款说明 ──
     r = cover_summary_start_row
@@ -1462,10 +1448,9 @@ def _xl_add_tiered_sheet(wb, data):
     n_tiers = len(tiers)
 
     # 列宽
-    ws.column_dimensions['A'].width = 28
+    ws.column_dimensions['A'].width = 32
     ws.column_dimensions['B'].width = 10
-    ws.column_dimensions['C'].width = 14
-    tier_col_letters = ['D', 'E', 'F', 'G', 'H'][:n_tiers]
+    tier_col_letters = ['C', 'D', 'E', 'F', 'G'][:n_tiers]
     for col in tier_col_letters:
         ws.column_dimensions[col].width = 18
 
@@ -1479,14 +1464,9 @@ def _xl_add_tiered_sheet(wb, data):
 
     # 表头
     def tier_label(t):
-        d = get_deal_price_factor(t)
-        if d == 1:
-            return f"{t['标签']}（标准价）"
-        zhe = round(d * 10, 1)
-        zhe_str = f"{int(zhe)}折" if zhe == int(zhe) else f"{zhe}折"
-        return f"{t['标签']}（{zhe_str}）"
+        return t['标签']
 
-    headers = ['商品名称', '单位', '标准价'] + [tier_label(t) for t in tiers]
+    headers = ['商品名称', '单位'] + [tier_label(t) for t in tiers]
     for ci, h in enumerate(headers, 1):
         c = ws.cell(row=2, column=ci, value=h)
         _xl_header_style(c)
@@ -1515,7 +1495,7 @@ def _xl_add_tiered_sheet(wb, data):
 
         # 分类标题行
         ws.merge_cells(start_row=current_row, start_column=1,
-                       end_row=current_row, end_column=3 + n_tiers)
+                       end_row=current_row, end_column=2 + n_tiers)
         c = ws.cell(row=current_row, column=1, value=cat_name)
         c.font = Font(name='微软雅黑', bold=True, size=10, color='CC8800')
         c.fill = PatternFill('solid', fgColor='FFFBF0')
@@ -1527,10 +1507,10 @@ def _xl_add_tiered_sheet(wb, data):
         apply_tier_discount = cat_name not in NO_TIER_DISCOUNT_CATS
 
         for item in cat_items:
-            std_price = item.get('标准价', 0)
             unit = item.get('单位', '')
             item_qty = item.get('数量', 1)
             is_per_store = '店' in unit
+            unit_price = get_item_unit_price(item)
 
             c = ws.cell(row=current_row, column=1, value=item.get('商品名称', ''))
             c.font = Font(name='微软雅黑', size=9)
@@ -1540,27 +1520,19 @@ def _xl_add_tiered_sheet(wb, data):
             c.font = Font(name='微软雅黑', size=9)
             c.alignment = Alignment(horizontal='center', vertical='center')
 
-            if std_price == '赠送' or std_price is None:
-                c = ws.cell(row=current_row, column=3, value='赠送')
-                c.font = Font(name='微软雅黑', size=9)
-                c.alignment = Alignment(horizontal='center', vertical='center')
+            if unit_price == '赠送':
                 for ci in range(n_tiers):
-                    c = ws.cell(row=current_row, column=4 + ci, value='赠送')
+                    c = ws.cell(row=current_row, column=3 + ci, value='赠送')
                     c.font = Font(name='微软雅黑', size=9)
                     c.alignment = Alignment(horizontal='center', vertical='center')
             else:
-                std_d = Decimal(str(std_price))
-                c = ws.cell(row=current_row, column=3, value=float(std_d))
-                c.font = Font(name='微软雅黑', size=9)
-                c.number_format = '#,##0.00'
-                c.alignment = Alignment(horizontal='right', vertical='center')
                 for ti, t in enumerate(tiers):
                     d = Decimal(str(get_deal_price_factor(t))) if apply_tier_discount else Decimal('1')
                     qty = Decimal(str(t['门店数'])) if is_per_store else Decimal(str(item_qty))
-                    actual = calc_actual_price(std_d, d)
+                    actual = get_tier_unit_price(item, d) if apply_tier_discount else unit_price
                     subtotal = (actual * qty).quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)
                     cat_tier_totals[ti] += subtotal
-                    c = ws.cell(row=current_row, column=4 + ti, value=float(subtotal))
+                    c = ws.cell(row=current_row, column=3 + ti, value=float(subtotal))
                     c.font = Font(name='微软雅黑', size=9)
                     c.number_format = '#,##0.00'
                     c.alignment = Alignment(horizontal='right', vertical='center')
@@ -1569,13 +1541,13 @@ def _xl_add_tiered_sheet(wb, data):
             current_row += 1
 
         # 分类小计行
-        c = ws.cell(row=current_row, column=3, value='小计')
+        c = ws.cell(row=current_row, column=2, value='小计')
         c.font = Font(name='微软雅黑', bold=True, size=9)
         c.fill = PatternFill('solid', fgColor='FFF5D6')
         c.alignment = Alignment(horizontal='center', vertical='center')
         for ti, tot in enumerate(cat_tier_totals):
             tier_grand_totals[ti] += tot
-            c = ws.cell(row=current_row, column=4 + ti, value=float(tot))
+            c = ws.cell(row=current_row, column=3 + ti, value=float(tot))
             c.font = Font(name='微软雅黑', bold=True, size=9)
             c.number_format = '#,##0.00'
             c.fill = PatternFill('solid', fgColor='FFF5D6')
@@ -1584,12 +1556,12 @@ def _xl_add_tiered_sheet(wb, data):
         current_row += 1
 
     # 合计行
-    c = ws.cell(row=current_row, column=3, value='合计')
+    c = ws.cell(row=current_row, column=2, value='合计')
     c.font = Font(name='微软雅黑', bold=True, size=10, color='CC8800')
     c.fill = PatternFill('solid', fgColor='FFE082')
     c.alignment = Alignment(horizontal='center', vertical='center')
     for ti, tot in enumerate(tier_grand_totals):
-        c = ws.cell(row=current_row, column=4 + ti, value=float(tot))
+        c = ws.cell(row=current_row, column=3 + ti, value=float(tot))
         c.font = Font(name='微软雅黑', bold=True, size=10, color='CC8800')
         c.number_format = '#,##0.00'
         c.fill = PatternFill('solid', fgColor='FFE082')
@@ -1600,7 +1572,7 @@ def _xl_add_tiered_sheet(wb, data):
 
     # 折算单店年费行
     ws.merge_cells(start_row=current_row, start_column=1,
-                   end_row=current_row, end_column=3)
+                   end_row=current_row, end_column=2)
     c = ws.cell(row=current_row, column=1, value='折算单店年费')
     c.font = Font(name='微软雅黑', bold=True, size=9)
     c.fill = PatternFill('solid', fgColor='FFF5D6')
@@ -1608,14 +1580,14 @@ def _xl_add_tiered_sheet(wb, data):
     for ti, t in enumerate(tiers):
         stores = Decimal(str(t['门店数']))
         per_store = (tier_grand_totals[ti] / stores).quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)
-        c = ws.cell(row=current_row, column=4 + ti, value=float(per_store))
+        c = ws.cell(row=current_row, column=3 + ti, value=float(per_store))
         c.font = Font(name='微软雅黑', size=9)
         c.number_format = '#,##0.00'
         c.fill = PatternFill('solid', fgColor='FFF5D6')
         c.alignment = Alignment(horizontal='right', vertical='center')
     ws.row_dimensions[current_row].height = 18
 
-    _xl_apply_border(ws, 2, 1, current_row, 3 + n_tiers)
+    _xl_apply_border(ws, 2, 1, current_row, 2 + n_tiers)
 
 
 # ============================================================
@@ -1624,6 +1596,7 @@ def _xl_add_tiered_sheet(wb, data):
 def calc_profit(data, cost_data):
     """计算利润并在终端输出"""
     items = data.get('报价项目', [])
+    internal_financials = data.get('internal_financials', {})
 
     print("\n" + "="*70)
     print("  利润测算报告（内部参考，严禁外泄）")
@@ -1638,36 +1611,41 @@ def calc_profit(data, cost_data):
 
     for item in items:
         name = item.get('商品名称', '')
-        std_price = item.get('标准价', 0)
-        deal_price_factor = get_deal_price_factor(item)
         qty = item.get('数量', 1)
+        actual_price = get_item_unit_price(item)
+        subtotal = get_item_subtotal(item)
 
-        if std_price == '赠送' or std_price is None:
+        if actual_price == '赠送':
             print(f"{name:<20} {'赠送':>8} {'赠送':>8} {qty:>4} {'-':>10} {'-':>8}")
             continue
 
-        std_price_d = Decimal(str(std_price))
         qty_d = Decimal(str(qty))
-        actual_price = calc_actual_price(std_price_d, deal_price_factor)
+        item_cost_subtotal = get_item_cost_subtotal(item)
+        item_profit = None
+        cost_d = get_item_cost_unit_price(item)
 
-        # 查找底价
-        cost = resolve_item_cost(item, data, cost_lookup)
+        if cost_d is None:
+            cost = resolve_item_cost(item, data, cost_lookup)
+            if cost not in (None, '赠送'):
+                cost_d = Decimal(str(cost))
 
-        if cost is None or cost == '赠送':
-            print(f"{name:<20} {'未知':>8} {float(actual_price):>8.0f} {qty:>4} {'未知':>10} {'未知':>8}")
-            total_revenue += actual_price * qty_d
+        if cost_d is None:
+            print(f"{name:<20} {'未知':>8} {float(actual_price):>8.2f} {qty:>4} {'未知':>10} {'未知':>8}")
+            total_revenue += subtotal
             continue
 
-        cost_d = Decimal(str(cost))
-        item_profit = (actual_price - cost_d) * qty_d
-        item_revenue = actual_price * qty_d
+        if item_cost_subtotal is None:
+            item_cost_subtotal = (cost_d * qty_d).quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)
+
+        item_profit = subtotal - item_cost_subtotal
+        item_revenue = subtotal
 
         if actual_price > 0:
             margin = float((actual_price - cost_d) / actual_price * 100)
         else:
             margin = 0
 
-        total_cost += cost_d * qty_d
+        total_cost += item_cost_subtotal
         total_revenue += item_revenue
 
         # 警告：售价低于底价
@@ -1677,6 +1655,11 @@ def calc_profit(data, cost_data):
 
     total_profit = total_revenue - total_cost
     overall_margin = float(total_profit / total_revenue * 100) if total_revenue > 0 else 0
+    if internal_financials:
+        total_cost = _money_decimal(internal_financials.get('cost_total', total_cost))
+        total_revenue = _money_decimal(internal_financials.get('quote_total', total_revenue))
+        total_profit = _money_decimal(internal_financials.get('profit_total', total_profit))
+        overall_margin = float(internal_financials.get('profit_rate', overall_margin))
 
     print("-"*70)
     print(f"{'合计':<20} {float(total_cost):>8,.0f} {float(total_revenue):>8,.0f} {'':>4} {float(total_profit):>10,.0f} {overall_margin:>7.1f}%")

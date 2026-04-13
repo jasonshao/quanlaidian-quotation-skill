@@ -86,6 +86,10 @@ def round_to_10(value):
     return int((d / Decimal("10")).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * Decimal("10"))
 
 
+def round_money(value):
+    return float(Decimal(str(value)).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP))
+
+
 def parse_markdown_table(lines):
     table_lines = [line.strip() for line in lines if line.strip()]
     headers = [cell.strip() for cell in table_lines[0].strip("|").split("|")]
@@ -594,9 +598,37 @@ def validate_form(form, product_index, route_strategy):
     }
 
 
-def build_quote_item(product, standard_price, quantity, deal_price_factor, category, module_category):
+def _compute_quote_unit_price(module_category, standard_price, cost_price, deal_price_factor, protected):
+    if protected:
+        return round_money(cost_price)
+    if module_category == "门店软件套餐":
+        return round_money(Decimal(str(standard_price)) * Decimal(str(deal_price_factor)))
+    if module_category == "门店增值模块":
+        return round_money(Decimal(str(cost_price)) * Decimal("1.20"))
+    if module_category == "总部模块":
+        return round_money(Decimal(str(cost_price)) * Decimal("1.50"))
+    return round_money(cost_price)
+
+
+def build_quote_item(product, standard_price, cost_price, quantity, deal_price_factor, category, module_category):
     protected = is_protected_product(product["name"])
+    quote_unit_price = _compute_quote_unit_price(
+        module_category=module_category,
+        standard_price=standard_price,
+        cost_price=cost_price,
+        deal_price_factor=deal_price_factor,
+        protected=protected,
+    )
+    cost_unit_price = round_money(cost_price)
+    subtotal = round_money(Decimal(str(quote_unit_price)) * Decimal(str(quantity)))
+    cost_subtotal = round_money(Decimal(str(cost_unit_price)) * Decimal(str(quantity)))
+    profit = round_money(Decimal(str(subtotal)) - Decimal(str(cost_subtotal)))
+    margin = 0.0
+    if subtotal > 0:
+        margin = round_money((Decimal(str(profit)) / Decimal(str(subtotal))) * Decimal("100"))
     item_factor = 1.0 if protected else deal_price_factor
+    if standard_price not in (None, "赠送", 0):
+        item_factor = round_factor(Decimal(str(quote_unit_price)) / Decimal(str(standard_price)))
     return {
         "商品分类": category,
         "商品名称": product["name"],
@@ -609,6 +641,31 @@ def build_quote_item(product, standard_price, quantity, deal_price_factor, categ
         "数量": quantity,
         "模块分类": module_category,
         "protected_item_bypass": protected,
+        "商品单价": quote_unit_price,
+        "报价小计": subtotal,
+        "成本单价": cost_unit_price,
+        "成本小计": cost_subtotal,
+        "利润": profit,
+        "利润率": margin,
+    }
+
+
+def build_internal_financials(items):
+    quote_total = Decimal("0.00")
+    cost_total = Decimal("0.00")
+    profit_total = Decimal("0.00")
+    for item in items:
+        quote_total += Decimal(str(item.get("报价小计", 0) or 0))
+        cost_total += Decimal(str(item.get("成本小计", 0) or 0))
+        profit_total += Decimal(str(item.get("利润", 0) or 0))
+    profit_rate = Decimal("0.00")
+    if quote_total > 0:
+        profit_rate = (profit_total / quote_total) * Decimal("100")
+    return {
+        "quote_total": round_money(quote_total),
+        "cost_total": round_money(cost_total),
+        "profit_total": round_money(profit_total),
+        "profit_rate": round_money(profit_rate),
     }
 
 
@@ -780,14 +837,14 @@ def build_quotation_config(form, quote_date=None):
     items = []
 
     package = lookup_product(product_index, form["门店套餐"], meal_type=meal_type, group="门店套餐")
-    package_standard_price, _, _ = resolve_product_pricing(package, meal_type, baseline_index)
-    items.append(build_quote_item(package, package_standard_price, store_count, deal_price_factor, "标准软件套餐", "门店软件套餐"))
+    package_standard_price, package_cost_price, _ = resolve_product_pricing(package, meal_type, baseline_index)
+    items.append(build_quote_item(package, package_standard_price, package_cost_price, store_count, deal_price_factor, "标准软件套餐", "门店软件套餐"))
 
     for module_name in form.get("门店增值模块", []):
         module = lookup_product(product_index, module_name, meal_type=meal_type, group="门店增值模块")
         category = "保护类商品" if is_protected_product(module["name"]) else "增值模块"
-        standard_price, _, _ = resolve_product_pricing(module, meal_type, baseline_index)
-        items.append(build_quote_item(module, standard_price, store_count, deal_price_factor, category, "门店增值模块"))
+        standard_price, cost_price, _ = resolve_product_pricing(module, meal_type, baseline_index)
+        items.append(build_quote_item(module, standard_price, cost_price, store_count, deal_price_factor, category, "门店增值模块"))
 
     for module_name in form.get("总部模块", []):
         quantity_field = {
@@ -799,15 +856,15 @@ def build_quotation_config(form, quote_date=None):
             continue
         module = lookup_product(product_index, module_name, meal_type=meal_type, group="总部模块")
         category = "保护类商品" if is_protected_product(module["name"]) else "总部模块"
-        standard_price, _, _ = resolve_product_pricing(module, meal_type, baseline_index)
-        items.append(build_quote_item(module, standard_price, quantity, deal_price_factor, category, "总部模块"))
+        standard_price, cost_price, _ = resolve_product_pricing(module, meal_type, baseline_index)
+        items.append(build_quote_item(module, standard_price, cost_price, quantity, deal_price_factor, category, "总部模块"))
 
     implementation_type = form.get("实施服务类型")
     implementation_days = int(form.get("实施服务人天", 0) or 0)
     if implementation_type and implementation_days > 0:
         service = lookup_product(product_index, implementation_type, group="实施服务")
-        standard_price, _, _ = resolve_product_pricing(service, meal_type, baseline_index)
-        items.append(build_quote_item(service, standard_price, implementation_days, 1.0, "实施服务", "实施服务"))
+        standard_price, cost_price, _ = resolve_product_pricing(service, meal_type, baseline_index)
+        items.append(build_quote_item(service, standard_price, cost_price, implementation_days, 1.0, "实施服务", "实施服务"))
 
     protected_bypass_count = sum(1 for item in items if item.get("protected_item_bypass"))
     if protected_bypass_count > 0:
@@ -842,6 +899,7 @@ def build_quotation_config(form, quote_date=None):
         "餐饮类型": meal_type,
         "门店数量": store_count,
         "报价项目": items,
+        "internal_financials": build_internal_financials(items),
         "条款": default_terms(),
         "pricing_info": {
             "scope_match": route_strategy == "small-segment",
