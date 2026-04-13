@@ -584,6 +584,59 @@ def build_quote_item(product, standard_price, quantity, deal_price_factor, categ
     }
 
 
+def build_custom_quote_item(name, unit, standard_price, quantity, module_category="实施服务"):
+    return {
+        "商品分类": "实施服务",
+        "商品名称": name,
+        "单位": unit,
+        "标准价": int(standard_price),
+        "成交价系数": 1.0,
+        "deal_price_factor": 1.0,
+        "折扣": 0.0,
+        "数量": int(quantity),
+        "模块分类": module_category,
+        "protected_item_bypass": False,
+    }
+
+
+def _delivery_center_impl_base_fee(store_count):
+    if store_count <= 10:
+        return 5000
+    if store_count <= 50:
+        return 10000
+    if store_count <= 300:
+        return 20000
+    return 30000
+
+
+def build_supply_chain_implementation_items(form):
+    """
+    总部供应链实施费规则：
+    - 配送中心：首个配送中心按门店规模阶梯计费，同品牌其余配送中心按 50% 计费
+    - 生产加工：10000 元/个
+    - 智能预估：5000 元/个（按是否选择门店增值模块“智能预估”计 1 个）
+    """
+    headquarter_modules = set(form.get("总部模块", []) or [])
+    module_names = set(form.get("门店增值模块", []) or [])
+    store_count = int(form.get("门店数量", 0) or 0)
+    items = []
+
+    delivery_center_count = int(form.get("配送中心数量", 0) or 0) if "配送中心" in headquarter_modules else 0
+    if delivery_center_count > 0:
+        base_fee = _delivery_center_impl_base_fee(store_count)
+        total_fee = base_fee + int(round(base_fee * 0.5)) * max(0, delivery_center_count - 1)
+        items.append(build_custom_quote_item("供应链实施费（配送中心）", "项", total_fee, 1))
+
+    production_center_count = int(form.get("生产加工中心数量", 0) or 0) if "生产加工" in headquarter_modules else 0
+    if production_center_count > 0:
+        items.append(build_custom_quote_item("供应链实施费（生产加工）", "个", 10000, production_center_count))
+
+    if "智能预估" in module_names:
+        items.append(build_custom_quote_item("供应链实施费（智能预估）", "个", 5000, 1))
+
+    return items
+
+
 def default_terms():
     return [
         "以上报价金额均为含税金额，税率为6%",
@@ -759,6 +812,8 @@ def build_quotation_config(form, quote_date=None):
         category = "保护类商品" if is_protected_product(module["name"]) else "总部模块"
         standard_price, _, _ = resolve_product_pricing(module, meal_type, baseline_index)
         items.append(build_quote_item(module, standard_price, quantity, deal_price_factor, category, "总部模块"))
+
+    items.extend(build_supply_chain_implementation_items(form))
 
     implementation_type = form.get("实施服务类型")
     implementation_days = int(form.get("实施服务人天", 0) or 0)
