@@ -272,6 +272,22 @@ python3 scripts/check_openclaw_update.py --apply
 2. 更新 `CHANGELOG.md`
 3. 合并到 `main` 后发布 GitHub Release（tag 建议为 `v0.2.0`）
 
+### main 自动递增版本（可选）
+
+如需每次 `main` 有新提交就自动更新版本：
+
+- 工作流：`.github/workflows/auto-bump-version.yml`
+- 脚本：`scripts/bump_version.py`
+- 触发：`push` 到 `main`（忽略仅修改 `VERSION`/`CHANGELOG.md` 的提交）
+- 行为：默认按 `patch` 递增，并在 `CHANGELOG.md` 顶部追加当日记录
+
+如需手动验证：
+
+```bash
+python3 scripts/bump_version.py
+python3 scripts/bump_version.py --write
+```
+
 ## 飞书文件消息下载（推荐）
 
 建议OpenClaw在workspace新建files目录来存储生成的文件，并发送文件到飞书聊天消息中。
