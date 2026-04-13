@@ -208,12 +208,12 @@ def get_styles():
 # 辅助函数
 # ============================================================
 def fmt_money(val):
-    """格式化金额：带千分位逗号（对客展示不保留小数）"""
+    """格式化金额：带千分位逗号"""
     if val is None or val == '赠送':
         return '赠送'
     try:
-        d = Decimal(str(val)).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
-        return '{:,.0f}'.format(float(d))
+        d = Decimal(str(val)).quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)
+        return '{:,.2f}'.format(float(d))
     except:
         return str(val)
 
@@ -221,7 +221,7 @@ def fmt_pct(val):
     """格式化成交价系数百分比"""
     if val is None:
         return '-'
-    return f'{val*100:.0f}%'
+    return f'{val*100:.2f}%'
 
 
 def get_deal_price_factor(item_or_tier, default=1.0):
@@ -237,9 +237,7 @@ def get_deal_price_factor(item_or_tier, default=1.0):
 
 def calc_actual_price(std_price, deal_price_factor):
     raw = Decimal(str(std_price)) * Decimal(str(deal_price_factor))
-    # 按业务要求：折后价四舍五入到百位
-    rounded_hundred = (raw / Decimal('100')).quantize(Decimal('1'), rounding=ROUND_HALF_UP) * Decimal('100')
-    return rounded_hundred.quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)
+    return raw.quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)
 
 
 def _normalize_profit_group(module_category):
@@ -1032,7 +1030,7 @@ def _xl_write_item_table(ws, items, start_row, sheet_name='', compute_values=Fal
             _xl_data_style(c, align='center', bg=bg)
         else:
             c = ws.cell(row=current_row, column=5, value=float(std_price))
-            _xl_data_style(c, align='right', bg=bg, num_format='#,##0')
+            _xl_data_style(c, align='right', bg=bg, num_format='#,##0.00')
 
         # F: 成交价系数（存为小数，格式化为百分比）
         if is_gift:
@@ -1040,7 +1038,7 @@ def _xl_write_item_table(ws, items, start_row, sheet_name='', compute_values=Fal
             _xl_data_style(c, align='center', bg=bg)
         else:
             c = ws.cell(row=current_row, column=6, value=float(deal_price_factor))
-            _xl_data_style(c, align='center', bg=bg, num_format='0%')
+            _xl_data_style(c, align='center', bg=bg, num_format='0.00%')
 
         # G: 数量
         c = ws.cell(row=current_row, column=7, value=int(qty))
@@ -1051,27 +1049,27 @@ def _xl_write_item_table(ws, items, start_row, sheet_name='', compute_values=Fal
             c = ws.cell(row=current_row, column=8, value='赠送')
             _xl_data_style(c, align='center', bg=bg)
         elif compute_values:
-            actual = calc_actual_price(Decimal(str(std_price)), Decimal(str(deal_price_factor)))
-            c = ws.cell(row=current_row, column=8, value=float(actual))
-            _xl_data_style(c, align='right', bg=bg, num_format='#,##0')
+            actual = float(std_price) * float(deal_price_factor)
+            c = ws.cell(row=current_row, column=8, value=round(actual, 2))
+            _xl_data_style(c, align='right', bg=bg, num_format='#,##0.00')
         else:
             c = ws.cell(row=current_row, column=8,
-                        value=f'=ROUND(E{current_row}*F{current_row}/100,0)*100')
-            _xl_data_style(c, align='right', bg=bg, num_format='#,##0')
+                        value=f'=E{current_row}*F{current_row}')
+            _xl_data_style(c, align='right', bg=bg, num_format='#,##0.00')
 
         # I: 小计
         if is_gift:
             c = ws.cell(row=current_row, column=9, value='赠送')
             _xl_data_style(c, align='center', bg=bg)
         elif compute_values:
-            actual = calc_actual_price(Decimal(str(std_price)), Decimal(str(deal_price_factor)))
-            subtotal = actual * Decimal(str(int(qty)))
-            c = ws.cell(row=current_row, column=9, value=float(subtotal))
-            _xl_data_style(c, align='right', bg=bg, num_format='#,##0')
+            actual = float(std_price) * float(deal_price_factor)
+            subtotal = round(actual * int(qty), 2)
+            c = ws.cell(row=current_row, column=9, value=subtotal)
+            _xl_data_style(c, align='right', bg=bg, num_format='#,##0.00')
         else:
             c = ws.cell(row=current_row, column=9,
                         value=f'=H{current_row}*G{current_row}')
-            _xl_data_style(c, align='right', bg=bg, num_format='#,##0')
+            _xl_data_style(c, align='right', bg=bg, num_format='#,##0.00')
 
         ws.row_dimensions[current_row].height = 18
         current_row += 1
@@ -1095,7 +1093,7 @@ def _xl_write_item_table(ws, items, start_row, sheet_name='', compute_values=Fal
     c = ws.cell(row=total_row, column=9,
                 value=f'=SUM(I{data_start}:I{last_data_row})')
     _xl_total_style(c, align='right')
-    c.number_format = '#,##0'
+    c.number_format = '#,##0.00'
 
     ws.row_dimensions[total_row].height = 20
 
@@ -1554,7 +1552,7 @@ def _xl_add_tiered_sheet(wb, data):
                 std_d = Decimal(str(std_price))
                 c = ws.cell(row=current_row, column=3, value=float(std_d))
                 c.font = Font(name='微软雅黑', size=9)
-                c.number_format = '#,##0'
+                c.number_format = '#,##0.00'
                 c.alignment = Alignment(horizontal='right', vertical='center')
                 for ti, t in enumerate(tiers):
                     d = Decimal(str(get_deal_price_factor(t))) if apply_tier_discount else Decimal('1')
@@ -1564,7 +1562,7 @@ def _xl_add_tiered_sheet(wb, data):
                     cat_tier_totals[ti] += subtotal
                     c = ws.cell(row=current_row, column=4 + ti, value=float(subtotal))
                     c.font = Font(name='微软雅黑', size=9)
-                    c.number_format = '#,##0'
+                    c.number_format = '#,##0.00'
                     c.alignment = Alignment(horizontal='right', vertical='center')
 
             ws.row_dimensions[current_row].height = 18
@@ -1579,7 +1577,7 @@ def _xl_add_tiered_sheet(wb, data):
             tier_grand_totals[ti] += tot
             c = ws.cell(row=current_row, column=4 + ti, value=float(tot))
             c.font = Font(name='微软雅黑', bold=True, size=9)
-            c.number_format = '#,##0'
+            c.number_format = '#,##0.00'
             c.fill = PatternFill('solid', fgColor='FFF5D6')
             c.alignment = Alignment(horizontal='right', vertical='center')
         ws.row_dimensions[current_row].height = 18
@@ -1593,7 +1591,7 @@ def _xl_add_tiered_sheet(wb, data):
     for ti, tot in enumerate(tier_grand_totals):
         c = ws.cell(row=current_row, column=4 + ti, value=float(tot))
         c.font = Font(name='微软雅黑', bold=True, size=10, color='CC8800')
-        c.number_format = '#,##0'
+        c.number_format = '#,##0.00'
         c.fill = PatternFill('solid', fgColor='FFE082')
         c.alignment = Alignment(horizontal='right', vertical='center')
     ws.row_dimensions[current_row].height = 22
@@ -1612,7 +1610,7 @@ def _xl_add_tiered_sheet(wb, data):
         per_store = (tier_grand_totals[ti] / stores).quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)
         c = ws.cell(row=current_row, column=4 + ti, value=float(per_store))
         c.font = Font(name='微软雅黑', size=9)
-        c.number_format = '#,##0'
+        c.number_format = '#,##0.00'
         c.fill = PatternFill('solid', fgColor='FFF5D6')
         c.alignment = Alignment(horizontal='right', vertical='center')
     ws.row_dimensions[current_row].height = 18
