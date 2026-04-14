@@ -211,32 +211,21 @@ python3 scripts/run_openclaw_quotation.py \
 - 若折扣超出建议范围，需要明确提示风险
 - 若配置或依赖异常，优先返回清晰错误，而不是静默失败
 
-## 飞书下载实现要求
+## 飞书文件发送
 
-### 凭据配置（可选）
+脚本生成报价文件后，由 OpenClaw 原生飞书消息工具直接发送文件到对话。
 
-`FEISHU_APP_ID` 和 `FEISHU_APP_SECRET` 为**可选配置**：
+生成文件存放路径：`/home/gem/workspace/agent/workspace/files/`（OpenClaw 飞书工具可直接访问）。
 
-| 情况 | 行为 |
-|------|------|
-| 注入了飞书凭据 | 脚本直接调飞书 API 发送文件消息 |
-| **未注入凭据** | 文件复制到 `/tmp/openclaw/`，脚本提示"请使用 OpenClaw 飞书消息工具发送"，由 OpenClaw 原生 `message` 工具完成发送（**推荐方案，更稳定**） |
-
-推荐部署方式：不注入飞书凭据，直接由 OpenClaw 用原生工具发送文件，绕过脚本调 API 的复杂依赖。
-
-- 生成完成后，先在对话中发送报价预览文本；
-- 再发送 3 条飞书文件消息（PDF、Excel、JSON）；
-- 对话中明确告知"请直接点击飞书文件消息下载"。
-
-推荐命令（无需飞书凭据，文件复制到 `/tmp/openclaw/` 由 OpenClaw 发送）：
+推荐命令：
 
 ```bash
 python3 scripts/run_openclaw_quotation.py \
   --form 表单.json \
-  --output-dir /tmp/openclaw
+  --output-dir /home/gem/workspace/agent/workspace/files
 ```
 
-飞书多轮引导入口：
+> 注：不使用 `--send-to-feishu` 参数，由 OpenClaw 根据输出路径自动处理文件发送。
 
 ```bash
 python3 scripts/handle_feishu_quote_message.py \
