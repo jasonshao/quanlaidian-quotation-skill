@@ -226,10 +226,3 @@ python3 scripts/run_openclaw_quotation.py \
 ```
 
 > 注：不使用 `--send-to-feishu` 参数，由 OpenClaw 根据输出路径自动处理文件发送。
-
-```bash
-python3 scripts/handle_feishu_quote_message.py \
-  --chat-id oc_xxx \
-  --user-id ou_xxx \
-  --text "开始报价"
-```
