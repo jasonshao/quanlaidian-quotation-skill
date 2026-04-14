@@ -495,12 +495,13 @@ def build_standard_template(data, styles):
     # 合计行
     total_float = float(total)
     total_row = [
-        Paragraph(_mixed_text(''), styles['CellStyle']),
-        Paragraph(_mixed_text(''), styles['CellStyle']),
-        Paragraph(_mixed_text(''), styles['CellStyle']),
-        Paragraph(_mixed_text(''), styles['CellStyle']),
-        Paragraph(_mixed_text('合计'), styles['CellStyleCenter']),
-        Paragraph(_mixed_text(fmt_money(total_float)), styles['CellStyleRight']),
+        Paragraph(_mixed_text('合计'), styles['CellStyleCenter']),            # col 0: SPAN 起点
+        Paragraph(_mixed_text(''), styles['CellStyle']),                      # col 1: SPAN 内
+        Paragraph(_mixed_text(''), styles['CellStyle']),                      # col 2: SPAN 内
+        Paragraph(_mixed_text(''), styles['CellStyle']),                      # col 3: SPAN 内
+        Paragraph(_mixed_text(''), styles['CellStyle']),                      # col 4: SPAN 内
+        Paragraph(_mixed_text(''), styles['CellStyle']),                      # col 5: 商品单价（空）
+        Paragraph(_mixed_text(fmt_money(total_float)), styles['CellStyleRight']),  # col 6: 小计
     ]
     table_data.append(total_row)
 
