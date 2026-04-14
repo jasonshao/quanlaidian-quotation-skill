@@ -548,13 +548,13 @@ def validate_form(form, product_index, route_strategy):
 
     recommended_factor, chosen_factor, factor_source = normalize_deal_price_factor(form, route_strategy)
 
-    package = lookup_product(product_index, form["门店套餐"], group="门店套餐")
+    package = lookup_product(product_index, form["门店套餐"], meal_type=meal_type, group="门店套餐")
     if package["meal_type"] != meal_type:
         raise ValueError("餐饮类型与门店套餐不匹配")
 
     module_names = form.get("门店增值模块", [])
     for module_name in module_names:
-        module = lookup_product(product_index, module_name, group="门店增值模块")
+        module = lookup_product(product_index, module_name, meal_type=meal_type, group="门店增值模块")
         if module["meal_type"] != meal_type:
             raise ValueError("餐饮类型与门店增值模块不匹配")
 
