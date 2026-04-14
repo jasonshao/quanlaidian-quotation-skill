@@ -12,6 +12,7 @@ if __package__ in (None, ""):
 
 from scripts.build_quotation_config import build_quotation_config
 from scripts.feishu_file_delivery import (
+    FeishuCredentialMissing,
     FeishuDeliveryError,
     deliver_files_to_feishu,
     should_send_to_feishu,
@@ -188,6 +189,23 @@ def main(argv=None):
             print("报价文件已发送到飞书，请直接点击文件消息下载。")
             for item in results:
                 print(f"- {item['file_name']} | message_id={item['message_id']}")
+            return 0
+        except FeishuCredentialMissing as exc:
+            # 飞书凭据缺失，复制文件到 OpenClaw 可访问的目录，优雅降级
+            import shutil
+            accessible_dir = Path("/home/gem/workspace/agent/workspace/files")
+            accessible_dir.mkdir(parents=True, exist_ok=True)
+            accessible_paths = []
+            for p in [pdf_path, xlsx_path, config_path]:
+                dest = accessible_dir / p.name
+                shutil.copy2(p, dest)
+                accessible_paths.append(dest)
+            print(f"[警告] 飞书发送凭据未配置（{exc})，文件已复制到 OpenClaw 可访问目录。")
+            print(preview_text)
+            print("\n生成的文件（OpenClaw 飞书工具可直接发送）：")
+            for p in accessible_paths:
+                print(f"  {p}")
+            print("\n请使用 OpenClaw 飞书消息工具发送以上文件。")
             return 0
         except FeishuDeliveryError as exc:
             print(f"[错误] 飞书发送失败：{exc}")

@@ -15,6 +15,11 @@ class FeishuDeliveryError(RuntimeError):
     pass
 
 
+class FeishuCredentialMissing(FeishuDeliveryError):
+    """飞书凭据缺失，但不影响文件生成（优雅降级用）。"""
+    pass
+
+
 def _as_bool(value: str | None) -> bool:
     if value is None:
         return False
@@ -71,7 +76,7 @@ class FeishuClient:
         if not app_secret:
             missing.append("FEISHU_APP_SECRET")
         if missing:
-            raise FeishuDeliveryError("飞书发送缺少环境变量: " + ", ".join(missing))
+            raise FeishuCredentialMissing("飞书发送缺少环境变量: " + ", ".join(missing))
         if not final_receive_id:
             raise FeishuDeliveryError("飞书发送缺少接收目标：请传入 chat_id 或设置 FEISHU_RECEIVE_ID")
         return cls(app_id, app_secret, final_receive_id, final_receive_id_type)
