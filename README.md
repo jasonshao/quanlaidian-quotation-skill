@@ -42,38 +42,17 @@ python3 -m pip install -r requirements.txt
 
 ## 使用技能
 
-### 生成报价文件（主入口）
+### 生成报价文件
 
 ```bash
 export PRICING_BASELINE_KEY=<部署密钥>
 
 python3 scripts/run_openclaw_quotation.py \
-  --form references/openclaw_form_submission.example.json \
-  --output-dir ./output
-```
-
-如需同时发送到飞书聊天：
-
-```bash
-python3 scripts/run_openclaw_quotation.py \
   --form 表单.json \
-  --output-dir ./output \
-  --send-to-feishu \
-  --feishu-chat-id oc_xxx
+  --output-dir /home/gem/workspace/agent/workspace/files
 ```
 
-说明：
-- 发送目标优先使用 `--feishu-chat-id`，未提供时回退 `FEISHU_RECEIVE_ID`。
-- 飞书发送模式下，脚本不会在用户可见文本中输出服务器本地路径（如 `/tmp/...`），而是直接发送 PDF/Excel/JSON 三条飞书文件消息。
-
-### 飞书多轮引导入口
-
-```bash
-python3 scripts/handle_feishu_quote_message.py \
-  --chat-id oc_xxx \
-  --user-id ou_xxx \
-  --text "开始报价"
-```
+生成后由 OpenClaw 原生飞书消息工具直接发送文件到对话。
 
 ---
 
