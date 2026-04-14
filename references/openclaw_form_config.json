@@ -1,0 +1,194 @@
+{
+  "form_id": "quanlaidian-quotation-form",
+  "version": "1.0",
+  "title": "全来店报价单生成",
+  "subtitle": "填写业务信息后生成 PDF、Excel、JSON 三份报价文件",
+  "submission_example": "references/openclaw_form_submission.example.json",
+  "ui": {
+    "layout": "sections",
+    "submit_label": "生成报价文件",
+    "submit_hint": "默认保存到当前用户工作目录",
+    "success_message": "报价文件已生成，请在当前工作目录查看 PDF、Excel、JSON。",
+    "error_message": "表单校验失败或运行依赖缺失，请根据提示修正后重试。"
+  },
+  "sections": [
+    {
+      "id": "customer",
+      "title": "客户信息",
+      "fields": [
+        {
+          "key": "客户品牌名称",
+          "label": "客户品牌名称",
+          "component": "input",
+          "value_type": "string",
+          "required": true,
+          "placeholder": "例如：黑马汇"
+        }
+      ]
+    },
+    {
+      "id": "scope",
+      "title": "项目规模",
+      "fields": [
+        {
+          "key": "餐饮类型",
+          "label": "餐饮类型",
+          "component": "select",
+          "value_type": "string",
+          "required": true,
+          "options": [
+            "轻餐",
+            "正餐"
+          ]
+        },
+        {
+          "key": "门店数量",
+          "label": "门店数量",
+          "component": "number",
+          "value_type": "integer",
+          "required": true,
+          "minimum": 1
+        }
+      ]
+    },
+    {
+      "id": "products",
+      "title": "产品方案",
+      "fields": [
+        {
+          "key": "门店套餐",
+          "label": "门店套餐",
+          "component": "select",
+          "value_type": "string",
+          "required": true,
+          "dynamic_options": {
+            "source": "references/product_catalog.md",
+            "rule": "按餐饮类型筛选门店套餐"
+          }
+        },
+        {
+          "key": "门店增值模块",
+          "label": "门店增值模块",
+          "component": "multi_select",
+          "value_type": "array[string]",
+          "required": false,
+          "default": [],
+          "dynamic_options": {
+            "source": "references/product_catalog.md",
+            "rule": "按餐饮类型筛选门店增值模块"
+          }
+        },
+        {
+          "key": "总部模块",
+          "label": "总部模块",
+          "component": "multi_select",
+          "value_type": "array[string]",
+          "required": false,
+          "default": [],
+          "dynamic_options": {
+            "source": "references/product_catalog.md",
+            "rule": "按餐饮类型筛选总部模块"
+          }
+        },
+        {
+          "key": "配送中心数量",
+          "label": "配送中心数量",
+          "component": "number",
+          "value_type": "integer",
+          "required": false,
+          "default": 0,
+          "minimum": 0,
+          "visible_when": {
+            "总部模块": [
+              "配送中心"
+            ]
+          }
+        },
+        {
+          "key": "生产加工中心数量",
+          "label": "生产加工中心数量",
+          "component": "number",
+          "value_type": "integer",
+          "required": false,
+          "default": 0,
+          "minimum": 0,
+          "visible_when": {
+            "总部模块": [
+              "生产加工"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "pricing",
+      "title": "成交价系数与报价策略",
+      "fields": [
+        {
+          "key": "成交价系数",
+          "label": "成交价系数",
+          "component": "percentage",
+          "value_type": "number",
+          "required": false,
+          "minimum": 0.01,
+          "maximum": 1,
+          "default_from": "按门店数量自动推荐",
+          "warning_when": "超出建议范围时提示特批风险，人工改价必须填写原因"
+        },
+        {
+          "key": "是否启用阶梯报价",
+          "label": "是否启用阶梯报价",
+          "component": "switch",
+          "value_type": "boolean",
+          "required": false,
+          "default": false
+        }
+      ]
+    },
+    {
+      "id": "implementation",
+      "title": "实施服务",
+      "fields": [
+        {
+          "key": "实施服务类型",
+          "label": "实施服务类型",
+          "component": "select",
+          "value_type": "string",
+          "required": false,
+          "options": [
+            "一类城市顾问服务T5",
+            "二类城市顾问服务T5",
+            "定制化开发"
+          ]
+        },
+        {
+          "key": "实施服务人天",
+          "label": "实施服务人天",
+          "component": "number",
+          "value_type": "integer",
+          "required": false,
+          "default": 0,
+          "minimum": 0
+        }
+      ]
+    }
+  ],
+  "validation": {
+    "required_fields": [
+      "客户品牌名称",
+      "餐饮类型",
+      "门店数量",
+      "门店套餐"
+    ],
+    "conditional_rules": [
+      "勾选总部模块后，才要求填写对应数量字段",
+      "餐饮类型必须与套餐和模块匹配",
+      "成交价系数超出建议范围时给出风险提示，不阻断生成"
+    ]
+  },
+  "output_files": [
+    "品牌名-全来店-报价配置-YYYYMMDD.json",
+    "品牌名-全来店-报价单-YYYYMMDD.pdf",
+    "品牌名-全来店-报价单-YYYYMMDD.xlsx"
+  ]
+}

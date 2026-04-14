@@ -1,0 +1,164 @@
+{
+  "form_id": "quanlaidian-quotation-form",
+  "title": "全来店报价业务表单",
+  "description": "用于 OpenClaw 中收集报价所需业务信息。用户填写业务字段后，技能自动生成标准报价 JSON、PDF 和 Excel。",
+  "submit_action": {
+    "type": "script",
+    "command": "python3 scripts/run_openclaw_quotation.py --form <submitted-json> --output-dir ."
+  },
+  "fields": [
+    {
+      "key": "客户品牌名称",
+      "label": "客户品牌名称",
+      "type": "string",
+      "component": "input",
+      "required": true,
+      "placeholder": "例如：黑马汇",
+      "help_text": "报价单抬头只展示品牌名称。"
+    },
+    {
+      "key": "餐饮类型",
+      "label": "餐饮类型",
+      "type": "string",
+      "component": "select",
+      "required": true,
+      "options": [
+        "轻餐",
+        "正餐"
+      ],
+      "help_text": "决定可选套餐、增值模块和总部模块范围。"
+    },
+    {
+      "key": "门店数量",
+      "label": "门店数量",
+      "type": "integer",
+      "component": "number",
+      "required": true,
+      "minimum": 1,
+      "placeholder": "例如：20",
+      "help_text": "用于推荐成交价系数，并决定标准模板还是定制模板。"
+    },
+    {
+      "key": "门店套餐",
+      "label": "门店套餐",
+      "type": "string",
+      "component": "select",
+      "required": true,
+      "dynamic_options": {
+        "source": "references/product_catalog.md",
+        "filter": "按餐饮类型筛选门店套餐"
+      },
+      "help_text": "根据餐饮类型只展示对应产品线的套餐。"
+    },
+    {
+      "key": "门店增值模块",
+      "label": "门店增值模块",
+      "type": "array",
+      "component": "multi_select",
+      "required": false,
+      "dynamic_options": {
+        "source": "references/product_catalog.md",
+        "filter": "按餐饮类型筛选门店增值模块"
+      },
+      "default": [],
+      "help_text": "可按需勾选多个门店增值模块。"
+    },
+    {
+      "key": "总部模块",
+      "label": "总部模块",
+      "type": "array",
+      "component": "multi_select",
+      "required": false,
+      "dynamic_options": {
+        "source": "references/product_catalog.md",
+        "filter": "按餐饮类型筛选总部模块"
+      },
+      "default": [],
+      "help_text": "勾选后会展开对应数量字段。"
+    },
+    {
+      "key": "配送中心数量",
+      "label": "配送中心数量",
+      "type": "integer",
+      "component": "number",
+      "required": false,
+      "minimum": 0,
+      "default": 0,
+      "visible_when": {
+        "总部模块": [
+          "配送中心"
+        ]
+      },
+      "help_text": "仅在勾选“配送中心”总部模块时展示。"
+    },
+    {
+      "key": "生产加工中心数量",
+      "label": "生产加工中心数量",
+      "type": "integer",
+      "component": "number",
+      "required": false,
+      "minimum": 0,
+      "default": 0,
+      "visible_when": {
+        "总部模块": [
+          "生产加工"
+        ]
+      },
+      "help_text": "仅在勾选“生产加工”总部模块时展示。"
+    },
+    {
+      "key": "成交价系数",
+      "label": "成交价系数",
+      "type": "number",
+      "component": "percentage",
+      "required": false,
+      "minimum": 0.01,
+      "maximum": 1,
+      "default_from": "按门店数量自动推荐",
+      "help_text": "成交价系数 = 成交价 / 标准价。例如 0.25 表示按标准价25%成交。人工改价必须填写原因。"
+    },
+    {
+      "key": "是否启用阶梯报价",
+      "label": "是否启用阶梯报价",
+      "type": "boolean",
+      "component": "switch",
+      "required": false,
+      "default": false,
+      "help_text": "适用于客户尚未确定最终门店规模时的对比报价。"
+    },
+    {
+      "key": "实施服务类型",
+      "label": "实施服务类型",
+      "type": "string",
+      "component": "select",
+      "required": false,
+      "options": [
+        "一类城市顾问服务T5",
+        "二类城市顾问服务T5",
+        "定制化开发"
+      ],
+      "help_text": "按需选择，不需要可留空。"
+    },
+    {
+      "key": "实施服务人天",
+      "label": "实施服务人天",
+      "type": "integer",
+      "component": "number",
+      "required": false,
+      "minimum": 0,
+      "default": 0,
+      "help_text": "实施服务数量，单位为人天。"
+    }
+  ],
+  "output_files": [
+    "品牌名-全来店-报价配置-YYYYMMDD.json",
+    "品牌名-全来店-报价单-YYYYMMDD.pdf",
+    "品牌名-全来店-报价单-YYYYMMDD.xlsx"
+  ],
+  "out_of_scope": [
+    "硬件需求清单",
+    "联系人",
+    "联系电话",
+    "联系地址"
+  ]
+}
