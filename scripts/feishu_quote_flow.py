@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from scripts.feishu_file_delivery import FeishuClient
+from scripts.feishu_file_delivery import FeishuClient, deliver_files_to_feishu
 from scripts.feishu_quote_cards import (
     build_confirm_card,
     build_error_card,
@@ -147,19 +147,20 @@ def send_step_card(session: dict) -> str:
 
 
 def send_quote_result(chat_id: str, form_data: dict, output_paths: tuple) -> None:
-    client = FeishuClient.from_env(receive_id=chat_id, receive_id_type="chat_id")
-    token = client.get_tenant_access_token()
     summary = (
         "报价已生成\n"
         f"品牌：{form_data.get('客户品牌名称')}\n"
         f"餐饮类型：{form_data.get('餐饮类型')}\n"
         f"门店数量：{form_data.get('门店数量')}\n"
-        f"门店套餐：{form_data.get('门店套餐')}"
+        f"门店套餐：{form_data.get('门店套餐')}\n"
+        "报价文件将以飞书文件消息发送，请直接点击文件下载。"
     )
-    client.send_text_message(token, summary)
-    for path in output_paths:
-        file_key = client.upload_file(token, Path(path))
-        client.send_file_message(token, file_key)
+    deliver_files_to_feishu(
+        [Path(path) for path in output_paths],
+        preview_text=summary,
+        receive_id=chat_id,
+        receive_id_type="chat_id",
+    )
 
 
 def _apply_step_input(step: str, text: str, form_data: dict) -> None:

@@ -65,17 +65,15 @@ class FeishuClient:
         final_receive_id = (receive_id or os.getenv("FEISHU_RECEIVE_ID", "")).strip()
         final_receive_id_type = receive_id_type or os.getenv("FEISHU_RECEIVE_ID_TYPE", "chat_id").strip() or "chat_id"
 
-        missing = [
-            name
-            for name, value in (
-                ("FEISHU_APP_ID", app_id),
-                ("FEISHU_APP_SECRET", app_secret),
-                ("FEISHU_RECEIVE_ID", final_receive_id),
-            )
-            if not value
-        ]
+        missing = []
+        if not app_id:
+            missing.append("FEISHU_APP_ID")
+        if not app_secret:
+            missing.append("FEISHU_APP_SECRET")
         if missing:
             raise FeishuDeliveryError("飞书发送缺少环境变量: " + ", ".join(missing))
+        if not final_receive_id:
+            raise FeishuDeliveryError("飞书发送缺少接收目标：请传入 chat_id 或设置 FEISHU_RECEIVE_ID")
         return cls(app_id, app_secret, final_receive_id, final_receive_id_type)
 
     def _request_json(self, url: str, payload: dict, token: str | None = None) -> dict:
@@ -143,16 +141,23 @@ class FeishuClient:
         return self._send_message(token, "interactive", card)
 
 
-def should_send_to_feishu(explicit_flag: bool = False) -> bool:
+def should_send_to_feishu(explicit_flag: bool = False, receive_id: str | None = None) -> bool:
     if explicit_flag:
+        return True
+    if receive_id and str(receive_id).strip():
         return True
     if _as_bool(os.getenv("FEISHU_SEND_FILES")):
         return True
     return bool(os.getenv("FEISHU_RECEIVE_ID", "").strip())
 
 
-def deliver_files_to_feishu(file_paths: list[Path], preview_text: str | None = None) -> list[dict]:
-    client = FeishuClient.from_env()
+def deliver_files_to_feishu(
+    file_paths: list[Path],
+    preview_text: str | None = None,
+    receive_id: str | None = None,
+    receive_id_type: str = "chat_id",
+) -> list[dict]:
+    client = FeishuClient.from_env(receive_id=receive_id, receive_id_type=receive_id_type)
     token = client.get_tenant_access_token()
 
     results = []

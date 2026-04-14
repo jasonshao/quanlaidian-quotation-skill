@@ -196,7 +196,7 @@ python3 scripts/run_openclaw_quotation.py \
 2. 文件下载入口（直接可点）
 - 在对话中给出 3 个文件的可下载链接或可点击文件引用：PDF、Excel、JSON。
 - 链接文字应明确区分文件类型，例如：`下载报价单 PDF`、`下载报价单 Excel`、`下载报价配置 JSON`。
-- 如果运行环境不支持超链接，至少返回完整文件路径，保证用户可以在对话中直接拿到文件位置。
+- 飞书场景禁止把服务器本地路径（如 `/tmp/...`）当下载入口返回给用户；必须发送飞书文件消息并引导“直接点击文件下载”。
 
 失败时返回规则：
 
@@ -218,6 +218,7 @@ python3 scripts/run_openclaw_quotation.py \
 - 生成完成后，先在对话中发送报价预览文本；
 - 再发送 3 条飞书文件消息（PDF、Excel、JSON）；
 - 对话中明确告知“请直接点击飞书文件消息下载”。
+- 发送目标优先使用当前会话 `chat_id`，缺失时回退 `FEISHU_RECEIVE_ID`。
 
 推荐命令：
 
@@ -225,7 +226,8 @@ python3 scripts/run_openclaw_quotation.py \
 python3 scripts/run_openclaw_quotation.py \
   --form 表单.json \
   --output-dir . \
-  --send-to-feishu
+  --send-to-feishu \
+  --feishu-chat-id oc_xxx
 ```
 
 飞书多轮引导入口：

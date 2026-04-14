@@ -58,8 +58,13 @@ python3 scripts/run_openclaw_quotation.py \
 python3 scripts/run_openclaw_quotation.py \
   --form 表单.json \
   --output-dir ./output \
-  --send-to-feishu
+  --send-to-feishu \
+  --feishu-chat-id oc_xxx
 ```
+
+说明：
+- 发送目标优先使用 `--feishu-chat-id`，未提供时回退 `FEISHU_RECEIVE_ID`。
+- 飞书发送模式下，脚本不会在用户可见文本中输出服务器本地路径（如 `/tmp/...`），而是直接发送 PDF/Excel/JSON 三条飞书文件消息。
 
 ### 飞书多轮引导入口
 
