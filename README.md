@@ -1,3 +1,14 @@
+> ⚠️ **本仓库已归档 (Archived / Legacy)**
+>
+> 本仓库的「胖技能包」版本已不再维护。新版拆分为两个独立项目：
+>
+> - **瘦客户端（OpenClaw Skill）：** [`jasonshao/quanlaidian-quote-skills`](https://github.com/jasonshao/quanlaidian-quote-skills)
+> - **服务端（定价与文件生成）：** [`jasonshao/quanlaidian-quote-service`](https://github.com/jasonshao/quanlaidian-quote-service)
+>
+> 请在新仓库继续使用。本仓库仅作为历史参考保留。
+>
+> ---
+
 # quanlaidian-quotation-skill
 
 面向 OpenClaw Agent 的全来店报价技能。根据业务表单输入，自动生成三份标准报价文件：
